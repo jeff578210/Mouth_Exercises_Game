@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D 健口操</title>
+    <link rel="stylesheet" href="style.css">
+    
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8/dist/teachablemachine-image.min.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.154.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.154.0/examples/jsm/",
+          "@pixiv/three-vrm": "https://unpkg.com/@pixiv/three-vrm@2.0.0/lib/three-vrm.module.js"
+        }
+      }
+    </script>
+</head>
+<body>
+    <div id="loading-overlay">正在召喚 3D 夥伴與設備，請稍候...</div>
+    
+    <div class="main-layout">
+        <div class="left-panel">
+            <div id="canvas-container"></div>
+        </div>
+
+        <div class="right-panel">
+            <h1 class="game-title">健口操節奏挑戰</h1>
+
+            <div class="mode-selector" id="mode-selector">
+                <button class="mode-btn active" id="mode-mouth">👄 嘴型訓練</button>
+                <button class="mode-btn" id="mode-voice">🗣️ 發聲訓練</button>
+                <button class="mode-btn" id="mode-tongue">👅 舌頭訓練</button>
+            </div>
+            
+            <div class="feedback-container">
+                <div id="status-message">請點擊「新手教學」或選擇難度開始！</div>
+                <div id="hint-message" class="hint-text"></div>
+                
+                <div class="audio-meter" id="audio-meter-container" style="display: none; width: 80%; height: 20px; background-color: #ecf0f1; border-radius: 10px; margin: 15px auto; position: relative; overflow: hidden; box-shadow: inset 0 1px 3px rgba(0,0,0,0.2);">
+                    <div id="meter-fill" style="width: 0%; height: 100%; background-color: #3498db; border-radius: 10px; transition: width 0.1s, background-color 0.2s;"></div>
+                    <div id="meter-threshold" style="position: absolute; top: 0; bottom: 0; width: 3px; background-color: #e74c3c; left: 15%; z-index: 2;"></div>
+                </div>
+            </div>
+
+            <div class="conveyor-wrapper" id="game-ui" style="display: none;">
+                <div class="target-zone"></div> 
+                <div id="conveyor-belt"></div>
+            </div>
+            
+            <div id="voice-game-ui" style="display: none; width: 100%; height: 200px; justify-content: center; align-items: center; position: relative;">
+                <div id="stone-container" class="stone-intact">
+                    <div id="stone-text"></div>
+                    <div id="stone-hp"></div>
+                </div>
+            </div>
+
+            <div class="controls" id="tutorial-controls">
+                <button id="btn-tutorial" class="tutorial-btn" disabled>📖 新手教學 (第一次玩請點此)</button>
+            </div>
+
+            <div class="controls" id="start-controls">
+                <button id="btn-easy" class="diff-btn" disabled>🟢 初級 (無聲/寬鬆)</button>
+                <button id="btn-medium" class="diff-btn" disabled>🟡 中級 (小聲/標準)</button>
+                <button id="btn-hard" class="diff-btn" disabled>🔴 高級 (大聲/嚴格)</button>
+            </div>
+            
+            <div class="controls" id="game-controls" style="display: none;">
+                <button id="toggleMicBtn" class="mic-btn">🎙️ 語音判定：開啟</button>
+                <button id="endBtn">結束遊戲</button>
+            </div>
+
+            <div id="stats-panel" style="display: none;"></div>
+        </div>
+    </div>
+    
+    <video id="webcam" autoplay playsinline muted style="display: none;"></video>
+    <script type="module" src="./js/app.js"></script>
+</body>
+</html>

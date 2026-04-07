@@ -1,0 +1,629 @@
+@font-face {
+    font-family: 'jf-openhuninn';
+    src: url('https://cdn.jsdelivr.net/gh/justfont/open-huninn-font@master/font/jf-openhuninn-2.0.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+}
+
+/* 🔥 2. 更新你的動態漸層背景 (保留你原本的背景，但加上新字體) */
+@keyframes gradientBG {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+
+body {
+    margin: 0; padding: 0; 
+    font-family: 'jf-openhuninn', 'Segoe UI', "Microsoft JhengHei", Tahoma, sans-serif;
+    height: 100vh; overflow: hidden;
+    
+    /* 🔥 升級：疊加半透明可愛圓點 + 溫暖動態漸層 */
+    background: 
+        radial-gradient(circle, rgba(255,255,255,0.4) 15%, transparent 16%),
+        radial-gradient(circle, rgba(255,255,255,0.4) 15%, transparent 16%),
+        linear-gradient(-45deg, #ffe259, #ffa751, #a1c4fd, #c2e9fb);
+    background-size: 60px 60px, 60px 60px, 400% 400%; /* 圓點的大小與間距 */
+    background-position: 0 0, 30px 30px, 0% 50%;
+    
+    animation: gradientBG 15s ease infinite;
+}
+
+/* 🔥 優化 1：移除左側面板的覆蓋層與模糊，露出 3D 草原 */
+.left-panel {
+    flex: 5; 
+    position: relative;
+    background: none; /* 🔥 移除半透明白，讓 3D 場景透出來 */
+    backdrop-filter: none; /* 🔥 移除毛玻璃模糊 */
+    border-right: 2px solid rgba(255, 255, 255, 0.6); /* 保留邊框分隔 */
+    box-shadow: 5px 0 25px rgba(0,0,0,0.05);
+    z-index: 2;
+    overflow: hidden; /* 確保畫布不會溢出 */
+}
+
+#loading-overlay {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(255, 255, 255, 0.9);
+    display: flex; justify-content: center; align-items: center;
+    font-size: 24px; font-weight: bold; color: #34495e; z-index: 999;
+}
+
+/* 左右分屏佈局 */
+.main-layout {
+    display: flex; width: 100vw; height: 100vh;
+}
+#canvas-container { width: 100%; height: 100%; }
+
+.right-panel {
+    flex: 5; 
+    display: flex; flex-direction: column;
+    justify-content: flex-start; /* 🔥 改為從上往下排，避免內容過長時頂部被裁掉 */
+    align-items: center;
+    padding: 50px 20px; /* 增加上下邊距 */
+    box-sizing: border-box;
+    overflow-y: auto; /* 🔥 啟動垂直滾動條 */
+    overflow-x: hidden;
+}
+
+.game-title { 
+    color: #2c3e50; 
+    font-size: 55px; 
+    margin-top: 2vh; /* 讓標題上面有一點空間，視覺上更好看 */
+    margin-bottom: 25px; 
+    text-shadow: 2px 2px 0px #ffffff, 4px 4px 10px rgba(0,0,0,0.1); 
+    letter-spacing: 3px; 
+}
+
+#status-message {
+    font-size: 50px; 
+    font-weight: 900;
+    color: #ffffff;
+    text-align: center; 
+    line-height: 1.3;   
+    text-shadow: 
+        -3px -3px 0 #f39c12, 3px -3px 0 #f39c12, 
+        -3px  3px 0 #f39c12, 3px  3px 0 #f39c12, 
+        -3px  0px 0 #f39c12, 3px  0px 0 #f39c12,
+         0px -3px 0 #f39c12, 0px  3px 0 #f39c12,
+         0px 8px 15px rgba(0,0,0,0.25);
+    margin-bottom: 10px;
+    letter-spacing: 2px;
+
+    /* 🔥 關鍵修復：預留固定高度，並讓文字垂直置中 */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 130px; /* 預留足夠容納兩行大字的空間 */
+    width: 100%;
+}
+
+/* 計時條 */
+.timer-container {
+    width: 80%; max-width: 400px; height: 12px;
+    background: #ecf0f1; border-radius: 6px;
+    margin-bottom: 20px; overflow: hidden;
+}
+#timer-bar {
+    width: 100%; height: 100%; background: #2ecc71;
+    /* CSS 控制動畫，3秒縮短到0 */
+    transition: width linear, background-color 0.3s;
+}
+
+/* 水平輸送帶與判定區 */
+.conveyor-wrapper {
+    position: relative; width: 100%; max-width: 550px; height: 150px;
+    min-width: 0;       /* 🔥 關鍵修復：解決 Flexbox 子元素撐爆父元素寬度的 bug */
+    flex-shrink: 0;     /* 🔥 確保外框高度與寬度絕對不會被擠壓變形 */
+    box-sizing: border-box;
+    display: flex; align-items: center; overflow: hidden;
+    background: rgba(255, 255, 255, 0.3); 
+    backdrop-filter: blur(12px); border: 2px solid rgba(255, 255, 255, 0.8);
+    border-radius: 75px;
+    box-shadow: inset 0 5px 15px rgba(255,255,255,0.5), 0 10px 30px rgba(0,0,0,0.1);
+    margin-bottom: 40px;
+}
+
+.target-zone {
+    position: absolute; left: 20px; top: 15px;
+    width: 120px; height: 120px;
+    border: 4px dashed rgba(255, 255, 255, 0.9); border-radius: 50%;
+    box-sizing: border-box; z-index: 1;
+    box-shadow: 0 0 15px rgba(255,255,255,0.5);
+}
+
+#conveyor-belt {
+    display: flex; align-items: center; gap: 20px;
+    padding-left: 25px; 
+    z-index: 2;
+    width: max-content; /* 🔥 確保內部泡泡能自由展開，不再硬扯外面的白色軌道框 */
+}
+
+/* 泡泡設計 */
+.bubble {
+    width: 80px; height: 80px; border-radius: 50%;
+    background: rgba(255, 255, 255, 0.6); 
+    border: 2px solid rgba(255, 255, 255, 0.9);
+    display: flex; justify-content: center; align-items: center;
+    font-size: 38px; /* 注音稍微放大 */
+    font-weight: bold; color: #7f8c8d;
+    flex-shrink: 0; transition: all 0.3s cubic-bezier(0.25, 1.5, 0.5, 1);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+    text-shadow: 1px 1px 2px rgba(255,255,255,0.8); /* 微微的反光感 */
+}
+
+.bubble.current {
+    width: 105px; height: 105px; font-size: 55px; color: white;
+    
+    /* 🔥 這裡改回你原本熟悉的藍色漸層 */
+    background: linear-gradient(135deg, #3498db, #2980b9); 
+    border: 3px solid #fff;
+    
+    /* 🔥 陰影的顏色也配合改成藍色系，維持立體發光感 */
+    box-shadow: 0 10px 25px rgba(52, 152, 219, 0.5), inset 0 5px 10px rgba(255,255,255,0.4);
+    
+    transform: scale(1.05);
+    text-shadow: 2px 2px 5px rgba(0,0,0,0.2); 
+}
+
+/* 泡泡破裂動畫 (成功) */
+@keyframes pop {
+    0% { transform: scale(1); opacity: 1; }
+    40% { transform: scale(1.3); opacity: 0.8; }
+    100% { transform: scale(1.5); opacity: 0; filter: blur(4px); }
+}
+.pop-animation { animation: pop 0.3s forwards; }
+
+/* 泡泡消散動畫 (超時失敗) */
+@keyframes fade-miss {
+    0% { transform: scale(1); opacity: 1; background: #e74c3c;}
+    100% { transform: scale(0.8); opacity: 0; }
+}
+.fade-animation { animation: fade-miss 0.3s forwards; }
+
+/* 按鈕與統計面板 */
+.controls { display: flex; gap: 15px; }
+button {
+    padding: 12px 30px; font-size: 18px; font-weight: bold; color: white;
+    background-color: #3498db; border: none; border-radius: 30px; cursor: pointer;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.2); transition: background 0.2s;
+}
+button:hover { background-color: #2980b9; }
+button:disabled { background-color: #95a5a6; cursor: not-allowed; }
+#endBtn { background-color: #e74c3c; } #endBtn:hover { background-color: #c0392b; }
+
+#stats-panel {
+    margin-top: 20px; padding: 20px; background: white; border-radius: 15px;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.1); width: 80%; font-size: 18px; color: #2c3e50;
+}
+.stat-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee; }
+/* --- 🔥 新增：音量條與提示文字樣式 --- */
+.feedback-container {
+    display: flex; flex-direction: column; align-items: center; 
+    width: 100%; margin-bottom: 15px;
+}
+
+.pose-icon {
+    width: 60px; height: 60px;
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.4);
+    border: 3px solid rgba(255, 255, 255, 0.8);
+    display: flex; justify-content: center; align-items: center;
+    font-size: 32px; font-weight: bold; color: #95a5a6;
+    transition: all 0.3s cubic-bezier(0.25, 1.5, 0.5, 1);
+    box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+}
+/* 當該符號變成目標時的「活潑高亮」狀態 */
+.pose-icon.active {
+    background: linear-gradient(135deg, #f1c40f, #f39c12); /* 亮眼橘黃色 */
+    color: white;
+    border-color: #ffffff;
+    transform: scale(1.25) translateY(-5px); /* 放大並往上跳 */
+    box-shadow: 0 10px 20px rgba(243, 156, 18, 0.4);
+    z-index: 2;
+}
+.hint-text {
+    font-size: 30px;
+    font-weight: bold;
+    color: #ffffff;
+    text-align: center; 
+    line-height: 1.3;
+    text-shadow: 
+        -2px -2px 0 #e74c3c, 2px -2px 0 #e74c3c, 
+        -2px  2px 0 #e74c3c, 2px  2px 0 #e74c3c,
+         0px 4px 8px rgba(0,0,0,0.3); 
+         
+    /* 🔥 關鍵修復：預留固定高度，確保不推擠下方元件 */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 80px; /* 預留兩行提示字的空間 */
+    width: 100%;
+}
+.audio-meter {
+    display: flex; align-items: center; gap: 10px; 
+    width: 80%; max-width: 350px; margin-bottom: 20px;
+}
+.audio-meter span {
+    font-size: 16px; font-weight: bold; color: #7f8c8d; white-space: nowrap;
+}
+.meter-bg {
+    flex-grow: 1; height: 18px; background: #ecf0f1; 
+    border-radius: 10px; overflow: hidden; position: relative;
+    box-shadow: inset 0 2px 5px rgba(0,0,0,0.1);
+}
+#meter-fill {
+    width: 0%; height: 100%; background: #3498db; 
+    transition: width 0.1s linear, background-color 0.2s;
+}
+.meter-threshold {
+    position: absolute; left: 25%; /* 這裡設定及格線在 25% 的位置 */
+    top: 0; bottom: 0; width: 3px; background: rgba(231, 76, 60, 0.8); z-index: 2;
+}
+/* --- 🔥 更新：泡泡快超時的透明度閃爍 (呼吸燈效果) --- */
+@keyframes fade-blink {
+    0% { opacity: 1; }
+    50% { opacity: 0.2; } /* 變透明 */
+    100% { opacity: 1; }
+}
+
+.warning-blink {
+    animation: fade-blink 1s infinite ease-in-out;
+    /* 乾淨俐落，沒有多餘的紅色外框或陰影 */
+}
+/* --- 🔥 更新：泡泡快超時的【紅色＋透明】呼吸燈 --- */
+@keyframes fade-blink-red {
+    0% { opacity: 1; background: linear-gradient(135deg, #3498db, #2980b9); }
+    50% { opacity: 0.4; background: #e74c3c; } /* 變透明且底色轉紅 */
+    100% { opacity: 1; background: linear-gradient(135deg, #3498db, #2980b9); }
+}
+
+.warning-blink {
+    animation: fade-blink-red 1.2s infinite ease-in-out !important;
+}
+
+/* --- 🔥 新增：難度按鈕樣式 --- */
+#start-controls {
+    display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;
+}
+.diff-btn {
+    padding: 18px 30px; /* 🔥 點擊範圍增加 */
+    font-size: 22px;    /* 🔥 字體放大 */
+    border-radius: 40px; border: none; cursor: pointer;
+    transition: transform 0.1s;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1); /* 加上立體陰影更像實體按鈕 */
+}
+.diff-btn:active { transform: scale(0.95); }
+
+#btn-easy { background-color: #2ecc71; }
+#btn-easy:hover:not(:disabled) { background-color: #27ae60; }
+#btn-easy:disabled { background-color: #a8e6cf; }
+
+#btn-medium { background-color: #f1c40f; color: #2c3e50; }
+#btn-medium:hover:not(:disabled) { background-color: #f39c12; }
+#btn-medium:disabled { background-color: #fce38a; }
+
+#btn-hard { background-color: #e74c3c; }
+#btn-hard:hover:not(:disabled) { background-color: #c0392b; }
+#btn-hard:disabled { background-color: #ffaaa5; }
+@keyframes fade-blink-red {
+    0% { opacity: 1; background: linear-gradient(135deg, #3498db, #2980b9); }
+    50% { opacity: 0.4; background: #e74c3c; } 
+    100% { opacity: 1; background: linear-gradient(135deg, #3498db, #2980b9); }
+}
+.warning-blink {
+    animation: fade-blink-red 1.2s infinite ease-in-out !important;
+}
+/* 
+#start-controls, #tutorial-controls {
+    display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;
+    margin-bottom: 15px; width: 100%;
+} */
+#start-controls, #tutorial-controls, #game-controls {
+    display: flex; gap: 15px; flex-wrap: wrap; justify-content: center;
+    margin-bottom: 20px; width: 100%;
+}
+.diff-btn {
+    padding: 12px 18px; font-size: 16px; border-radius: 30px; transition: transform 0.1s;
+}
+.diff-btn:active { transform: scale(0.95); }
+#btn-easy { background-color: #2ecc71; }
+#btn-easy:hover:not(:disabled) { background-color: #27ae60; }
+#btn-easy:disabled { background-color: #a8e6cf; }
+#btn-medium { background-color: #f1c40f; color: #2c3e50; }
+#btn-medium:hover:not(:disabled) { background-color: #f39c12; }
+#btn-medium:disabled { background-color: #fce38a; }
+#btn-hard { background-color: #e74c3c; }
+#btn-hard:hover:not(:disabled) { background-color: #c0392b; }
+#btn-hard:disabled { background-color: #ffaaa5; }
+
+/* 🔥 新增：教學按鈕專屬特效 */
+.tutorial-btn {
+    background-color: #9b59b6; 
+    font-size: 26px; /* 🔥 字體放大 */
+    padding: 20px 40px; /* 🔥 點擊範圍大幅增加 */
+    width: 90%; max-width: 450px; 
+    border-radius: 50px; /* 變更圓潤 */
+    color: white; border: none;
+    box-shadow: 0 4px 10px rgba(155, 89, 182, 0.4); cursor: pointer;
+    animation: pulse-purple 2s infinite; transition: all 0.2s;
+}
+.tutorial-btn:hover:not(:disabled) { background-color: #8e44ad; }
+.tutorial-btn:disabled { background-color: #d2b4de; animation: none; cursor: not-allowed; }
+
+@keyframes pulse-purple {
+    0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(155, 89, 182, 0.7); }
+    70% { transform: scale(1.03); box-shadow: 0 0 0 10px rgba(155, 89, 182, 0); }
+    100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(155, 89, 182, 0); }
+}
+/* 🔥 新增：語音開關按鈕樣式 */
+.mic-btn, #endBtn {
+    padding: 16px 28px;
+    font-size: 22px;
+    border-radius: 40px;
+    border: none; cursor: pointer;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+.mic-btn:hover {
+    background-color: #2980b9;
+}
+/* 關閉時的樣式 (變灰) */
+.mic-btn.off {
+    background-color: #95a5a6;
+    color: #ecf0f1;
+}
+.mic-btn.off:hover {
+    background-color: #7f8c8d;
+}
+/* 🔥 新增：泡泡被鎖定時的禁止圖示 */
+.bubble.locked::after {
+    content: "🚫";
+    position: absolute;
+    font-size: 55px;
+    z-index: 10;
+    opacity: 0.9;
+    animation: none; 
+}
+
+/* 確保禁止圖示能完美疊加在正中央 */
+.bubble {
+    position: relative; 
+}
+
+/* 🔥 新增：模式選擇區樣式 */
+.mode-selector {
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+    margin-bottom: 20px;
+    width: 100%;
+}
+
+.mode-btn {
+    flex: 1;
+    padding: 15px 10px;
+    font-family: 'jf-openhuninn', sans-serif;
+    font-size: 20px;
+    border: 3px solid #f0f0f0;
+    border-radius: 15px;
+    background-color: white;
+    color: #888;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+    box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+}
+
+.mode-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 12px rgba(0,0,0,0.1);
+}
+
+/* 標示「目前選中」的模式 */
+.mode-btn.active {
+    background-color: #ffe259; /* 與你背景漸層呼應的暖黃色 */
+    color: #d35400;
+    border-color: #ffa751;
+    font-weight: bold;
+    transform: scale(1.05);
+    box-shadow: 0 8px 15px rgba(255, 167, 81, 0.3);
+}
+
+/* =========================================
+   🍦 冰淇淋遊戲專屬樣式 (範圍限制版)
+   ========================================= */
+#ice-cream-target {
+    position: absolute;
+    font-size: 80px; /* 稍微縮小一點，避免超出人物框 */
+    z-index: 50;
+    display: none;
+    filter: drop-shadow(0 0 20px rgba(255, 215, 0, 0.8));
+    transition: transform 0.2s;
+    pointer-events: none; /* 避免滑鼠點擊干擾 */
+}
+
+/* 將 % 數往內縮，讓冰淇淋緊緊貼在虛擬人物的上下左右 */
+.ic-up { top: 5%; left: 50%; transform: translateX(-50%); }
+.ic-down { bottom: 5%; left: 50%; transform: translateX(-50%); }
+.ic-left { top: 50%; left: 5%; transform: translateY(-50%); }
+.ic-right { top: 50%; right: 5%; transform: translateY(-50%); }
+
+.ic-pop {
+    animation: iceCreamPop 0.4s ease-out forwards;
+}
+
+@keyframes iceCreamPop {
+    0% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.5); opacity: 0.8; filter: drop-shadow(0 0 40px rgba(255, 255, 255, 1)); }
+    100% { transform: scale(0); opacity: 0; }
+}
+
+/* =========================================
+   📱 響應式設計 (RWD) - 平板與窄螢幕適應
+   ========================================= */
+@media (max-width: 950px) {
+    /* 1. 將主排版改為上下排列，並允許整個畫面滾動 */
+    .main-layout {
+        flex-direction: column !important;
+        height: auto !important;
+        overflow-y: auto !important;
+    }
+
+    /* 2. 上方區塊：虛擬人物 (固定高度，避免太扁或太長) */
+    .left-panel {
+        width: 100% !important;
+        height: 45vh !important; 
+        min-height: 350px !important;
+        border-right: none !important;
+        border-bottom: 3px solid #bdc3c7; /* 加上分隔線 */
+    }
+
+    /* 3. 下方區塊：遊戲互動區 (高度自動往下長) */
+    .right-panel {
+        width: 100% !important;
+        height: auto !important;
+        min-height: 55vh;
+        padding: 15px !important;
+        box-sizing: border-box;
+    }
+
+    /* 4. 微調發聲模式的巨石大小 */
+    #stone-container {
+        width: 140px;
+        height: 140px;
+    }
+    #stone-text {
+        font-size: 50px;
+    }
+
+    /* 5. 微調嘴型/舌頭模式的輸送帶 */
+    .conveyor-wrapper {
+        transform: scale(0.9);
+        transform-origin: center center;
+    }
+
+    /* 6. 微調冰淇淋的位置 (如果有套用的話) */
+    .ic-up { top: 3%; }
+    .ic-down { bottom: 3%; }
+}
+
+/* =========================================
+   📱 手機版專屬 RWD (螢幕寬度小於 600px 時觸發)
+   這段必須放在平板 RWD 的下方，讓它能覆蓋設定
+   ========================================= */
+@media (max-width: 600px) {
+    
+    /* 1. 大幅縮小虛擬人物的高度 */
+    .left-panel {
+        height: 30vh !important;       /* 只佔螢幕 30% 的高度 */
+        min-height: 220px !important;  /* 最小高度縮減，避免佔用太多空間 */
+    }
+
+    /* 2. 讓右側遊戲區獲得更多空間 */
+    .right-panel {
+        height: auto !important;
+        min-height: 70vh !important;
+        padding: 10px !important;      /* 內距縮小，爭取更多顯示空間 */
+    }
+
+    /* 3. 縮小標題與按鈕，適應手機螢幕 */
+    .game-title {
+        font-size: 24px !important;
+        margin-bottom: 10px;
+    }
+
+    .mode-btn {
+        padding: 8px 10px;
+        font-size: 14px;
+        flex: 1; /* 讓按鈕平均分配寬度 */
+        margin: 0 2px;
+    }
+
+    /* 4. 輸送帶與泡泡再稍微縮小一點 */
+    .conveyor-wrapper {
+        transform: scale(0.75);
+        transform-origin: top center;
+    }
+
+    /* 5. 發聲模式的巨石縮小 */
+    #stone-container {
+        width: 120px;
+        height: 120px;
+    }
+    #stone-text {
+        font-size: 45px;
+    }
+}
+
+/* =========================================
+   🎮 遊戲進行中的控制按鈕區 (麥克風開關 / 結束遊戲)
+   ========================================= */
+#game-controls {
+    justify-content: center; /* 讓裡面的按鈕「水平置中」 */
+    align-items: center;     /* 讓裡面的按鈕「垂直對齊」 */
+    gap: 20px;               /* 如果有兩個按鈕，讓它們中間保持 20px 的安全距離 */
+    width: 100%;
+    margin-top: 15px;        /* 和上方的遊戲畫面保持一點距離 */
+    flex-wrap: wrap;         /* 如果手機螢幕太小，允許按鈕自動換行 */
+}
+
+/* 確保結束遊戲按鈕本身不會被拉長 */
+#endBtn {
+    margin: 0; /* 清除可能殘留的 margin */
+}
+/* =========================================
+   🪨 發聲模式：巨石破壞專屬樣式 
+   ========================================= */
+#stone-container {
+    width: 180px; 
+    height: 180px;
+    background: linear-gradient(135deg, #7f8c8d, #2c3e50);
+    border-radius: 20px; /* 圓角石頭感 */
+    display: flex; 
+    flex-direction: column; 
+    align-items: center; 
+    justify-content: center;
+    color: white; 
+    box-shadow: 0 15px 25px rgba(0,0,0,0.6), inset 0 0 20px rgba(255,255,255,0.2);
+    position: relative;
+    border: 4px solid #bdc3c7;
+    transition: filter 0.2s;
+}
+
+#stone-text {
+    font-size: 70px;
+    font-weight: bold;
+    text-shadow: 3px 3px 0px #000, -1px -1px 0px #444;
+    font-family: 'Arial Black', sans-serif;
+}
+
+#stone-hp {
+    font-size: 22px;
+    margin-top: 10px;
+    background: rgba(0,0,0,0.6);
+    padding: 5px 15px;
+    border-radius: 15px;
+    font-weight: bold;
+}
+
+/* 巨石遭到聲波攻擊時的震動 */
+.stone-hit {
+    animation: stoneShake 0.3s cubic-bezier(.36,.07,.19,.97) both;
+    filter: brightness(1.5);
+    border-color: #e74c3c;
+}
+
+@keyframes stoneShake {
+    10%, 90% { transform: translate3d(-4px, 2px, 0) rotate(-2deg); }
+    20%, 80% { transform: translate3d(4px, -2px, 0) rotate(2deg); }
+    30%, 50%, 70% { transform: translate3d(-8px, 4px, 0) rotate(-4deg); }
+    40%, 60% { transform: translate3d(8px, -4px, 0) rotate(4deg); }
+}
+
+/* 巨石徹底爆炸的特效 */
+.stone-explode {
+    animation: stoneExplode 0.6s forwards ease-out;
+}
+
+@keyframes stoneExplode {
+    0% { transform: scale(1); opacity: 1; filter: brightness(1.5) drop-shadow(0 0 20px red); }
+    40% { transform: scale(1.3); opacity: 0.8; filter: brightness(2); }
+    100% { transform: scale(2) translateY(-50px); opacity: 0; filter: brightness(3); }
+}
