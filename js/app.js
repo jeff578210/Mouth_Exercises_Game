@@ -7,7 +7,8 @@ import { VRMLoaderPlugin } from '@pixiv/three-vrm';
 
 import { initMouthMode, startMouthDetection, stopMouthDetection, resumeAudio, setMicStatus } from './mode_mouth.js'; // 👈 確保有 setMicStatus
 import { initTongueMode, startTongueDetection, stopTongueDetection } from './mode_tongue.js';
-import { initVoiceMode, startVoiceDetection, stopVoiceDetection } from './mode_voice.js';
+import { initVoiceMode, startVoiceDetection, stopVoiceDetection, voiceConfig} from './mode_voice.js';
+import { createModel } from 'vosk-browser';
 
 // ==========================================
 // 全域變數匯出 (讓其他模組可以使用)
@@ -19,6 +20,7 @@ export let currentTrainingMode = "mouth";
 export let poseQueue = [];
 export let isTutorialLocked = false;
 export let accumulatedHoldTime = 0;
+let recognizer = null; //vosk語音辨識
 
 export const DIFFICULTY_CONFIG = {
     tutorial: { requireAudio: true, volThreshold: 15, holdDuration: 1500, accumulateProgress: true, isTutorial: true, jaw_A: 0.25, pucker_U: 0.4, funnel_O: 0.25, stretch_I: 0.3, stretch_E: 0.15 },
@@ -32,7 +34,6 @@ let scene, camera, renderer, clock;
 let turnTimeLeft = 5000;
 let blinkTimer = 0;
 let nextBlinkInterval = 3;
-const poses = ["ㄚ", "ㄧ", "ㄨ", "ㄟ", "ㄛ"]; 
 
 export let gameStats = {};
 
@@ -46,21 +47,69 @@ bgm.volume = 0.25;
 // ==========================================
 async function startSystem() {
     initThreeJS(); 
+    await initVosk();
     await initMouthMode();
-    await initTongueMode();
     await initVoiceMode();
+    await initTongueMode();
     
     // 系統載入完成後，立刻啟動背景頭部/嘴部追蹤，永遠不關閉 
     startMouthDetection(); 
     startTongueDetection();
 
+    //隱藏請稍候提示,顯示開始遊戲按鈕
     document.getElementById("loading-overlay").style.display = "none";
-    
     const btns = ["btn-tutorial", "btn-easy", "btn-medium", "btn-hard"];
     btns.forEach(id => {
         const btn = document.getElementById(id);
         if(btn) btn.disabled = false;
     });
+}
+async function initVosk() {
+    if (recognizer) return;
+    console.log("⏳ 正在載入 Vosk 英文模型...");
+    
+    try {
+        // 🌟 指向 public 資料夾裡的模型路徑
+        const modelUrl = './vosk_model/vosk-model-small-en-us-0.15.zip'; 
+        
+        const model = await createModel(modelUrl);
+        recognizer = new model.KaldiRecognizer(16000);
+        
+        // 設定要聽 partialresult (短促發音用這個最快！)
+        recognizer.on("partialresult", (message) => {
+            const transcript = message.result.partial.toLowerCase();
+            if (transcript) handleTranscript(transcript);
+        });
+
+        console.log("✅ Vosk 英文模型載入完成！");
+    } catch (error) {
+        console.error("❌ Vosk 初始化失敗:", error);
+    }
+}
+
+export function handleTranscript(text) {
+    console.log(`[聽到聲音]: "${text}"`);
+
+    // 取得當前的目標音節 (從 poseQueue 或你的變數來)
+    const targetPose = poseQueue[0]; 
+
+    // 建立英文辨識結果的容錯對照表
+    const dictionary = {
+        "PA": ["pa", "pop", "part", "path", "pad", "puff", "pal"],
+        "TA": ["ta", "top", "tap", "tall", "tart", "time", "tie"],
+        "KA": ["ka", "car", "cop", "cot", "cut", "come", "call"],
+        "LA": ["la", "lap", "lot", "laugh", "love", "lie"]
+    };
+
+    // 檢查辨識出來的文字，有沒有包含在我們的容錯字典裡
+    const validWords = dictionary[targetPose] || [];
+    
+    // 如果聽到的句子裡，包含任何一個容錯單字，就判定過關！
+    const isHit = validWords.some(word => text.includes(word));
+
+    if (isHit) {
+        console.log(`🎯 命中目標！喊出了 ${targetPose}`);
+    }
 }
 
 function initThreeJS() {
@@ -154,22 +203,13 @@ document.getElementById("mode-voice")?.addEventListener('click', () => switchTra
 document.getElementById("mode-tongue")?.addEventListener('click', () => switchTrainingMode('tongue'));
 
 function switchTrainingMode(mode) {
-    if (isGameRunning) return; 
+    if (isGameRunning) return; //遊戲進行中不能更換模式
     currentTrainingMode = mode;
     console.log(`切換至訓練模式：${mode}`);
-    //清空泡泡重新塞進題目
-    poseQueue = [];
-    let targetList = getSequence();
-    poseQueue.push(targetList[Math.floor(Math.random() * targetList.length)]);
     // UI 按鈕切換
     document.querySelectorAll('.mode-btn').forEach(btn => btn.classList.remove('active'));
     document.getElementById(`mode-${mode}`)?.classList.add('active');
-
-    if (mode === 'voice') {
-        startVoiceDetection(); // 啟動發聲模式專屬邏輯
-    } else {
-        stopVoiceDetection();  // 切到其他模式時關閉
-    }
+    initQueue(); //根據新的 currentTrainingMode，重新去各自的模組（如嘴型題庫、發聲題庫）抓取對應的關卡資料，重新填滿陣列
 }
 
 // ==========================================
@@ -229,7 +269,7 @@ function startGame(mode) {
     const isMicOff = micBtn && micBtn.classList.contains('off');
     const isEasyMode = (mode === "easy");
     const isTongueMode = (currentTrainingMode === 'tongue'); 
-    const isVoiceMode = (currentTrainingMode === 'voice'); // 判斷發聲模式
+    const isVoiceMode = (currentTrainingMode === 'voice');
 
     // 🌟 修復 1：動態重置統計資料 (根據不同模式準備不同的計分板)
     gameStats = {};
@@ -241,19 +281,8 @@ function startGame(mode) {
     statKeys.forEach(k => { gameStats[k] = { success: 0, fail: 0 }; });
 
     // 切換 UI 顯示狀態
-    const els = {
-        "tutorial-controls": "none",
-        "start-controls": "none",
-        "game-controls": "flex",
-        "game-ui": isVoiceMode ? "none" : "flex",
-        "voice-game-ui": isVoiceMode ? "flex" : "none", 
-        "stats-panel": "none",
-        "audio-meter-container": "flex" 
-    };
-    for (let id in els) {
-        let el = document.getElementById(id);
-        if (el) el.style.display = els[id];
-    }
+    changeUIshow(isVoiceMode);
+    
 
     const meterContainer = document.getElementById("audio-meter-container");
 
@@ -286,11 +315,8 @@ function startGame(mode) {
             if (module.setMicStatus) module.setMicStatus(!isMicOff);
         }
     });
-
-    if (isVoiceMode) {
-        initQueue(); 
-        import('./mode_voice.js').then(module => { module.startVoiceDetection(); });
-    }
+    initQueue(); 
+    renderBelt(); 
     startTurnTimer();
 }
 
@@ -314,7 +340,12 @@ function endGame() {
         "start-controls": "flex",
         "game-controls": "none",
         "game-ui": "none",
-        "audio-meter-container": "none" 
+        "audio-meter-container": "none" ,
+        "mode-mouth":"flex", //嘴型訓練按鈕
+        "mode-voice":"flex", //發聲訓練按鈕
+        "mode-tongue":"flex", //舌頭訓練按鈕
+        "hint-message":"none", //遊戲內提示文字
+         "game-title":"flex" //遊戲標題
     };
     for (let id in els) {
         let el = document.getElementById(id);
@@ -361,7 +392,7 @@ function getTutorialSequence() {
         return ["⬆️", "⬇️", "⬅️", "➡️", "⬆️", "⬇️", "⬅️", "➡️", "⬆️"];
     }
     if (currentTrainingMode === 'voice') {
-        return ["PA", "TA", "KA", "LA", "PA", "TA", "KA", "LA"];
+        return voiceConfig.voiceTutorialTopic;
     }
     return ["ㄚ", "ㄧ", "ㄨ", "ㄚ", "ㄧ", "ㄨ", "ㄚ", "ㄧ", "ㄨ"];
 }
@@ -376,7 +407,6 @@ function getSequence() {
     return ["ㄚ", "ㄧ", "ㄨ"];
 }
 
-// 📖 產生陣列的邏輯
 function initQueue() {
     poseQueue = [];
     if (currentDifficulty === "tutorial") {
@@ -384,43 +414,82 @@ function initQueue() {
         const seq = getTutorialSequence();
         for (let i = 0; i < 6; i++) poseQueue.push(seq[i]);
     } else {
-        // 🔴 初中高級題目
+        // 初中高級題目
         let targetList = getSequence();
         for (let i = 0; i < 6; i++) poseQueue.push(targetList[Math.floor(Math.random() * targetList.length)]);
     }
-    renderBelt();
+    if(isGameRunning){
+        renderBelt();
+    } 
+        
 }
 
-function renderBelt() {
-    const conveyorBelt = document.getElementById("conveyor-belt");
-    if(!conveyorBelt) return;
-    conveyorBelt.innerHTML = "";
-    conveyorBelt.style.transition = "none"; 
-    conveyorBelt.style.transform = "translateX(0)";
+//不管任何狀態只要呼叫就將輸送帶重新渲染
+export function renderBelt() {
+    // 防呆：如果題庫是空的，就不需要畫畫面
+    if (poseQueue.length === 0) return;
+    if (currentTrainingMode === 'voice') {
+        // ==========================================
+        // 🎤 發聲模式：渲染中央大石頭
+        // ==========================================
+        const stone = document.getElementById("stone-container");
+        const text = document.getElementById("stone-text");
+        const hp = document.getElementById("stone-hp");
+        voiceConfig.remainingHits = (currentDifficulty === 'tutorial') ? 1 : voiceConfig.MAX_HEALTH;//教學模式血量1
+        if (stone && text && hp) {
+            stone.className = ""; // 瞬間洗掉上一回合的爆炸或震動動畫
+            text.innerText = poseQueue[0]; // 直接從陣列拿最新的題目
+            
+            // 確保畫面上顯示最新的血量 (remainingHits 需要是全域變數，並在呼叫此函式前先更新好)
+            hp.innerText = `剩餘 ${voiceConfig.remainingHits} 次`; 
+        }
 
-    poseQueue.forEach((pose, index) => {
-        const bubble = document.createElement("div");
-        bubble.className = "bubble";
-        if (index === 0) bubble.classList.add("current");
-        bubble.id = `bubble-${index}`;
-        bubble.innerText = pose;
-        conveyorBelt.appendChild(bubble);
-    });
+    }
+    else {
+        // ==========================================
+        // 👄👅 嘴型/舌頭模式：渲染無限輸送帶泡泡
+        // ==========================================
+        const conveyorBelt = document.getElementById("conveyor-belt");//輸送帶元素
+        if (!conveyorBelt) return;
+
+        conveyorBelt.innerHTML = "";
+        conveyorBelt.style.transition = "none";//關閉動畫顯示不然translateX(0)將泡泡拉回時,會顯示出泡泡向右移動
+        conveyorBelt.style.transform = "translateX(0)";
+
+        poseQueue.forEach((pose, index) => { //泡泡渲染回來
+            const bubble = document.createElement("div");
+            bubble.className = "bubble";
+            
+            if (index === 0) {
+                bubble.classList.add("current");;//最左側泡泡加大加粗
+            }
+            
+            bubble.id = `bubble-${index}`;
+            bubble.innerText = pose;
+            conveyorBelt.appendChild(bubble);
+        });
+    }
 }
 
 function startTurnTimer() {
-    if (!isGameRunning) return;
-    const targetPose = poseQueue[0];
+    if (!isGameRunning || poseQueue.length === 0) return;
+    const targetPose = poseQueue[0]; //當前題目
     const statusDisplay = document.getElementById("status-message");
     if (statusDisplay) statusDisplay.innerText = `${targetPose} 維持！！！`;
     accumulatedHoldTime = 0; 
 
-    // 👇 翻譯語音
+    // 教學語音提示
     let spokenText = targetPose;
-    if (targetPose === '⬆️') spokenText = '舌頭往上';
-    else if (targetPose === '⬇️') spokenText = '舌頭往下';
-    else if (targetPose === '⬅️') spokenText = '舌頭往左';
-    else if (targetPose === '➡️') spokenText = '舌頭往右';
+    if (currentTrainingMode === 'mouth') {
+        spokenText = `請跟著喊：${targetPose}`
+    } else if (currentTrainingMode === 'voice') {
+        spokenText = `大聲喊出：${targetPose}`
+    } else if (currentTrainingMode === 'tongue') {
+        if (targetPose === '⬆️') spokenText = '舌頭往上';
+        else if (targetPose === '⬇️') spokenText = '舌頭往下';
+        else if (targetPose === '⬅️') spokenText = '舌頭往左';
+        else if (targetPose === '➡️') spokenText = '舌頭往右';
+    }
 
     // ==========================================
     // 🍦 冰淇淋召喚術：精準定位在 3D 模型框內
@@ -456,28 +525,51 @@ function startTurnTimer() {
     }
     // ==========================================
 
-    const currentBubble = document.getElementById("bubble-0");
-    
+    const currentBubble = document.getElementById("bubble-0");//取得最左邊泡泡
+    const stone = document.getElementById("stone-container"); //取得石頭
     window.speechSynthesis.cancel(); 
-    const utterance = new SpeechSynthesisUtterance(`請跟著喊：${spokenText}`);
+    const utterance = new SpeechSynthesisUtterance(spokenText);
     utterance.lang = "zh-TW";
 
-    if (currentDifficulty === "tutorial") {
-        isTutorialLocked = true; // 進入鎖定狀態 (第一循環)
-        
-        utterance.onend = () => {
-            // 第二循環 (tutorialIndex >= 4) 時，可以設定不鎖定，或者直接由 user 指令決定
-            // 根據你的需求：第一循環先講解 (Locked)，第二循環不限制
-            if (tutorialIndex >= 4) {
-                isTutorialLocked = false; 
-            } else {
-                isTutorialLocked = false; // 講解完畢，解鎖讓玩家發聲
-            }
-        };
-    } else {
-        isTutorialLocked = false; 
+    let lockThreshold = 4; //設定教學模式前面多少題要聽完語音才能動作
+    if (currentTrainingMode === 'mouth') {
+        lockThreshold = 3;
+    } else if (currentTrainingMode === 'voice') {
+        voiceConfig.lockThreshold = 4;
+    } else if (currentTrainingMode === 'tongue') {
+        lockThreshold = 4;
     }
-    window.speechSynthesis.speak(utterance);
+    
+    if (currentDifficulty === "tutorial" && tutorialIndex < lockThreshold) {
+        //處於教學模式，且關卡還沒超過門檻，嚴格鎖定防搶拍
+        isTutorialLocked = true; 
+        //加上禁止符號特效
+        if(currentTrainingMode === 'voice'){
+            if(stone){
+                stone.classList.add("locked");
+            }
+        }else{
+            if (currentBubble){
+                currentBubble.classList.add("locked");
+            }
+        }
+        utterance.onend = () => {
+            isTutorialLocked = false; // 語音乖乖唸完後，才解鎖讓玩家動作
+            if (currentBubble) currentBubble.classList.remove("locked");
+            if (stone) stone.classList.remove("locked");
+        };
+        // ✅ 只有在教學模式，且遊戲真的在跑，才說話
+        if (isGameRunning) {
+            window.speechSynthesis.speak(utterance);
+        }
+        
+    } else {
+        //已經超過教學門檻，不鎖定，可邊聽邊做或直接做
+        isTutorialLocked = false; 
+        // 防禦性編程：確保不需要鎖定時，泡泡絕對不會卡著禁止符號
+        if (currentBubble) currentBubble.classList.remove("locked");
+        if (stone) stone.classList.remove("locked");
+    }
 }
 
 // 過關/失敗處理器
@@ -485,51 +577,77 @@ export function triggerResult(isSuccess) {
     const targetBubble = document.getElementById("bubble-0");
     const conveyorBelt = document.getElementById("conveyor-belt");
     const ic = document.getElementById("ice-cream-target"); 
+    const stone = document.getElementById("stone-container");
 
     if (isSuccess) {
-        gameStats[poseQueue[0]] && gameStats[poseQueue[0]].success++;
-        if(targetBubble) targetBubble.classList.add("pop-animation"); 
-        if (ic && currentTrainingMode === 'tongue') ic.classList.add('ic-pop'); 
+        gameStats[poseQueue[0]] && gameStats[poseQueue[0]].success++;//類計成功次數
+        if (currentTrainingMode === 'mouth') {
+            if(targetBubble) targetBubble.classList.add("pop-animation"); //成功時，泡泡（bubble-0）會播放破裂動畫（pop-animation）。
+        } else if (currentTrainingMode === 'voice') {
+            if(stone) stone.classList.add("stone-explode"); //石頭破碎動畫
+        } else if (currentTrainingMode === 'tongue') {
+            if(targetBubble) targetBubble.classList.add("pop-animation"); //成功時，泡泡（bubble-0）會播放破裂動畫（pop-animation）。
+            if (ic && currentTrainingMode === 'tongue') ic.classList.add('ic-pop'); //冰淇淋（ice-cream-target）的專屬特效
+        }
     } else {
-        gameStats[poseQueue[0]] && gameStats[poseQueue[0]].fail++;
-        if(targetBubble) targetBubble.classList.add("fade-animation"); 
+        gameStats[poseQueue[0]] && gameStats[poseQueue[0]].fail++; //類計失敗次數
+        if(targetBubble) targetBubble.classList.add("fade-animation"); //泡泡失敗特效
     }
 
-    if (conveyorBelt) {
+    if (conveyorBelt) { //輸送帶推進動畫,將泡泡向左移動
         conveyorBelt.style.transition = "transform 0.5s ease-in-out";
         conveyorBelt.style.transform = "translateX(-110px)"; 
     }
 
     setTimeout(() => {
-        poseQueue.shift(); 
+        poseQueue.shift(); // 移除已經判定過的目標
         
         // 👇 徹底分流：確保教學結束就是結束，一般模式就是無限隨機
-        if (currentDifficulty === "tutorial") {
+        if (currentDifficulty === "tutorial") { 
             tutorialIndex++;
-            if (tutorialIndex >= 9) { 
+            if (tutorialIndex >= 9) { //教學題目共9提超過9題就結束
                 endGame();
                 const statusDisplay = document.getElementById("status-message");
                 if (statusDisplay) statusDisplay.innerText = "🎉 新手教學完成！請選擇難度開始挑戰！";
                 return; 
             }
-            const seq = getTutorialSequence();
+            const seq = getTutorialSequence(); //取得各模式教學題目庫
             
-            let nextItemIndex = tutorialIndex + 5;
-            if (nextItemIndex < seq.length) { // 這裡建議用 seq.length 比較保險
-                poseQueue.push(seq[nextItemIndex]);
-            } else {
-                poseQueue.push("⭐"); 
+            let nextItemIndex = tutorialIndex + 5; //輸送帶總共會顯示5到6個題目
+            if (nextItemIndex < seq.length) {
+                poseQueue.push(seq[nextItemIndex]); //讓玩家能看到後續的題目
             }
+            
         } else {
             // 一般難度的無限替補
-            let targetList = getSequence();
-            poseQueue.push(targetList[Math.floor(Math.random() * targetList.length)]);
+            let targetList = getSequence();//取得一般模式題目庫
+            poseQueue.push(targetList[Math.floor(Math.random() * targetList.length)]);//隨機塞入題目
         }
 
-        renderBelt(); 
-        startTurnTimer(); 
-    }, 500); 
+        renderBelt();  //根據更新後的 poseQueue 重新畫出輸送帶上的內容
+        startTurnTimer(); //負責推進遊戲的「流程與邏輯」
+    }, 500); //設定為500毫秒對其上方的輸送帶動畫時間
 }
 
+function changeUIshow(isVoiceMode){
+const els = {
+        "tutorial-controls": "none",
+        "start-controls": "none",
+        "game-controls": "flex",
+        "game-ui": isVoiceMode ? "none" : "flex",
+        "voice-game-ui": isVoiceMode ? "flex" : "none", 
+        "stats-panel": "none",
+        "audio-meter-container": "flex" ,
+        "mode-mouth":"none", //嘴型訓練按鈕
+        "mode-voice":"none", //發聲訓練按鈕
+        "mode-tongue":"none", //舌頭訓練按鈕
+        "hint-message":"flex", //遊戲內提示文字
+        "game-title":"none" //遊戲標題
+    };
+    for (let id in els) {
+        let el = document.getElementById(id);
+        if (el) el.style.display = els[id];
+    }
+}
 // 啟動系統
 startSystem();

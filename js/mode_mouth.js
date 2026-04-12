@@ -25,14 +25,6 @@ export let isMicEnabled = false;
 export let recognitionMouth = null;
 export let latestSpokenWord = ""; 
 
-const MOUTH_SOUND_MAP = {
-    "ㄚ": ["啊", "阿", "a", "ㄚ", "哈", "哇", "拉", "他", "帕", "答"],
-    "ㄧ": ["一", "伊", "衣", "i", "e", "ㄧ", "以", "滴", "踢", "七", "西", "吉"],
-    "ㄨ": ["屋", "嗚", "無", "五", "u", "wu", "ㄨ", "物", "呼", "不", "出", "苦"],
-    "ㄟ": ["欸", "黑", "A", "ei", "ㄟ", "诶", "飛", "倍", "給", "美", "內"],
-    "ㄛ": ["喔", "哦", "o", "ou", "ㄛ", "我", "波", "破", "多", "佛"]
-};
-
 export function resumeAudio() {
     if (audioContext && audioContext.state === 'suspended') {
         audioContext.resume().then(() => console.log("🔊 音訊系統已成功喚醒！"));
@@ -42,6 +34,7 @@ export function resumeAudio() {
 // 初始化 MediaPipe 與攝影機、麥克風、語音辨識
 export async function initMouthMode() {
     console.log("正在載入 MediaPipe 臉部追蹤與語音辨識模組...");
+    //載入MediaPipe
     const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
     faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
         baseOptions: {
@@ -53,7 +46,7 @@ export async function initMouthMode() {
         runningMode: "VIDEO",
         numFaces: 1
     });
-    
+    //載入攝影機、麥克風
     video = document.getElementById("video"); 
     if (!video) {
         video = document.createElement('video');
@@ -63,7 +56,7 @@ export async function initMouthMode() {
         video.style.display = 'none';
         document.body.appendChild(video);
     }
-
+    //做 音量跳動條 或是判斷玩家 有沒有發出聲音
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         video.srcObject = stream;
@@ -82,30 +75,30 @@ export async function initMouthMode() {
         isMicEnabled = false;
     }
 
-    // 🎤 初始化語音辨識
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognition) {
-        recognitionMouth = new SpeechRecognition();
-        recognitionMouth.continuous = true;
-        recognitionMouth.interimResults = true;
-        recognitionMouth.lang = 'zh-TW';
+    // 辨識發出的語音,無限循環
+    // const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    // if (SpeechRecognition) {
+    //     recognitionMouth = new SpeechRecognition();
+    //     recognitionMouth.continuous = true;
+    //     recognitionMouth.interimResults = true;
+    //     recognitionMouth.lang = 'zh-TW';
 
-        recognitionMouth.onresult = (event) => {
-            if (!isDetecting || currentTrainingMode !== 'mouth' || !isGameRunning) return;
-            let currentTranscript = "";
-            for (let i = event.resultIndex; i < event.results.length; i++) {
-                currentTranscript += event.results[i][0].transcript.toLowerCase();
-            }
-            latestSpokenWord = currentTranscript; 
-            console.log(`[嘴型模式-收音] 聽到: "${latestSpokenWord}"`);
-        };
+    //     recognitionMouth.onresult = (event) => {
+    //         if (!isDetecting || currentTrainingMode !== 'mouth' || !isGameRunning) return;
+    //         let currentTranscript = "";
+    //         for (let i = event.resultIndex; i < event.results.length; i++) {
+    //             currentTranscript += event.results[i][0].transcript.toLowerCase();
+    //         }
+    //         latestSpokenWord = currentTranscript; 
+    //         console.log(`[嘴型模式-收音] 聽到: "${latestSpokenWord}"`);
+    //     };
 
-        recognitionMouth.onend = () => {
-            if (isDetecting && currentTrainingMode === 'mouth') {
-                try { recognitionMouth.start(); } catch(e){}
-            }
-        };
-    }
+    //     recognitionMouth.onend = () => {
+    //         if (isDetecting && currentTrainingMode === 'mouth') {
+    //             try { recognitionMouth.start(); } catch(e){}
+    //         }
+    //     };
+    // }
 
     console.log("✅ 嘴型模式初始化完成");
 }
@@ -113,10 +106,10 @@ export async function initMouthMode() {
 export function startMouthDetection() {
     if (isDetecting) return;
     isDetecting = true;
-    lastTime = performance.now();
-    latestSpokenWord = ""; 
+    lastTime = performance.now(); //這是一個極度精確的瀏覽器計時器這通常用來計算 兩幀之間的經過時間，或是用來判斷玩家 維持某個嘴型持續了幾秒鐘
+    latestSpokenWord = "";  //把前一局（或上一次測試）留下來的語音辨識紀錄清空。這樣可以防止玩家一進遊戲，就因為上一局講的「ㄚ」還卡在變數裡，導致系統直接判定第一關過關。
     
-    if (recognitionMouth) {
+    if (recognitionMouth) { //檢查是否開啟語音判定
         try { recognitionMouth.stop(); } catch(e){}
         setTimeout(() => { try { recognitionMouth.start(); } catch(e){} }, 100);
     }

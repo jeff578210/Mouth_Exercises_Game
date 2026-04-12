@@ -28,7 +28,7 @@
         </div>
 
         <div class="right-panel">
-            <h1 class="game-title">健口操節奏挑戰</h1>
+            <h1 class="game-title" id="game-title">健口操節奏挑戰</h1>
 
             <div class="mode-selector" id="mode-selector">
                 <button class="mode-btn active" id="mode-mouth">👄 嘴型訓練</button>
@@ -38,7 +38,7 @@
             
             <div class="feedback-container">
                 <div id="status-message">請點擊「新手教學」或選擇難度開始！</div>
-                <div id="hint-message" class="hint-text"></div>
+                <div id="hint-message" class="hint-text" style="display: none;"></div>
                 
                 <div class="audio-meter" id="audio-meter-container" style="display: none; width: 80%; height: 20px; background-color: #ecf0f1; border-radius: 10px; margin: 15px auto; position: relative; overflow: hidden; box-shadow: inset 0 1px 3px rgba(0,0,0,0.2);">
                     <div id="meter-fill" style="width: 0%; height: 100%; background-color: #3498db; border-radius: 10px; transition: width 0.1s, background-color 0.2s;"></div>

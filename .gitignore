@@ -12,3 +12,5 @@ model.vroid
 VRMWithTongue.vrm
 VRMWithTongue失敗.vrm
 為改版.html
+node_modules
+vosk_model

@@ -377,9 +377,28 @@ button:disabled { background-color: #95a5a6; cursor: not-allowed; }
 .bubble.locked::after {
     content: "🚫";
     position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
     font-size: 55px;
     z-index: 10;
     opacity: 0.9;
+    pointer-events: none; 
+    
+    animation: none; 
+}
+
+.stone-container.locked::after {
+    content: "🚫";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 55px;
+    z-index: 100;
+    opacity: 0.9;
+    pointer-events: none; 
+    
     animation: none; 
 }
 
@@ -387,7 +406,9 @@ button:disabled { background-color: #95a5a6; cursor: not-allowed; }
 .bubble {
     position: relative; 
 }
-
+.stone-container {
+    position: relative;
+}
 /* 🔥 新增：模式選擇區樣式 */
 .mode-selector {
     display: flex;
