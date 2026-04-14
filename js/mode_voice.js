@@ -1,11 +1,14 @@
 // js/mode_voice.js
-import { currentVrm, currentTrainingMode, isGameRunning, isTutorialLocked, gameStats, poseQueue, triggerResult ,currentDifficulty ,renderBelt,handleTranscript} from './app.js';
+import { currentVrm, currentTrainingMode, isGameRunning, isTutorialLocked, gameStats, poseQueue, triggerResult ,currentDifficulty ,renderBelt } from './app.js';
 import { analyser, dataArray, isMicEnabled, recognitionMouth } from './mode_mouth.js';
 
 let isDetecting = false; //檢查遊戲有沒有再進行
 let currentTargetSyllable; //當前題目
 let hitCooldown = false; //防止連擊
 let recognition = null;  //語音偵測物件
+let recognizer; //擴充庫物件
+let isTfjsRunning = false; //Teachable Machine是否執行中
+export let isVoskRunning = false;
 export const voiceConfig = {
     id: 'mouth',
     voiceTutorialTopic: ["PA", "TA", "KA", "LA", "PA", "TA", "KA", "LA"], //教學模式題庫
@@ -23,8 +26,38 @@ const SYLLABLE_MAP = {
     "LA": ["la", "拉", "啦", "喇", "辣", "拿", "哪", "納", "藍", "落", "來", "哩", "了", "老", "na", "那", "男"]
 };
 
-export async function initVoiceMode() {
-    window.addEventListener('keydown', (event) => {
+
+// 在你的 startGame 函式中呼叫 startTfjsDetection()，
+// 並在 stopAllEngines 或 gameOver 時呼叫 stopTfjsDetection()。
+// 1. 初始化模型
+export async function initTfjsVoice() {
+    // 這裡指向你存放模型檔案的路徑
+    const currentPath = window.location.href.substring(0, window.location.href.lastIndexOf('/'));
+
+    // 語音模型
+    const VOICE_URL = currentPath + "/tm_model/voice/";
+    const checkpointURL = VOICE_URL + "model.json";
+    const metadataURL = VOICE_URL + "metadata.json";
+
+    try {
+        recognizer = speechCommands.create(
+            "BROWSER_FFT", // 使用瀏覽器內建的傅立葉轉換
+            undefined, 
+            checkpointURL, 
+            metadataURL
+        );
+
+        // 確保模型載入完成
+        await recognizer.ensureModelLoaded();
+        console.log("✅ TF.js 模型載入成功！標籤：", recognizer.wordLabels());
+    } catch (error) {
+        console.error("❌ 模型載入失敗:", error);
+    }
+}
+
+// 2. 啟動監聽
+export async function startTfjsDetection() {
+     window.addEventListener('keydown', (event) => {
         switch(event.code) {
             case 'Space': 
             console.log(`🎯 命中目標音`);
@@ -33,6 +66,59 @@ export async function initVoiceMode() {
             break; 
         }
     });
+    if (!recognizer || isTfjsRunning) return;
+
+    isTfjsRunning = true;
+
+    // listen() 會啟動麥克風並持續回傳結果
+    await recognizer.listen(result => {
+        const scores = result.scores; // 每個標籤的信心機率陣列
+        const labels = recognizer.wordLabels(); // 你的標籤陣列
+        
+        // 找出最高分的索引
+        let maxIndex = 0;
+        let maxScore = 0;
+        for (let i = 0; i < scores.length; i++) {
+            if (scores[i] > maxScore) {
+                maxScore = scores[i];
+                maxIndex = i;
+            }
+        }
+
+        const detectedWord = labels[maxIndex];
+
+        // 🌟 判定門檻：信心度必須超過 0.85，且不是「背景雜音」
+        if (maxScore > 0.85 && detectedWord !== "_background_noise_") {
+            console.log(`🎯 偵測到音節: ${detectedWord} (信心度: ${(maxScore * 100).toFixed(1)}%)`);
+            
+            // 呼叫你的遊戲邏輯，例如：
+            // handleHit(detectedWord); 
+        }
+    }, {
+        includeSpectrogram: false, // 遊戲不需要視覺頻譜，關閉以節省效能
+        probabilityThreshold: 0.75, // 核心過濾門檻
+        overlapFactor: 0.5, // 偵測視窗重疊率，0.5 代表反應較快
+        invokeCallbackOnNoiseAndUnknown: false
+    });
+    if(isGameRunning){
+        predictLoop(); //AI 模型判定主迴圈（例如臉部追蹤或是音量頻譜分析）呼叫它代表「判定引擎」正式開始運轉，每一幀都會去檢查玩家有沒有達成動作
+    }
+}
+
+// 3. 停止監聽
+export function stopTfjsDetection() {
+    if (recognizer && isTfjsRunning) {
+        recognizer.stopListening();
+        isTfjsRunning = false;
+        console.log("🔇 已關閉語音監聽");
+    }
+}
+
+export async function initVoiceMode() {
+    // startVoskDetection();
+   
+
+
     // const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     // if (SpeechRecognition) {
     //     recognition = new SpeechRecognition();
@@ -65,20 +151,19 @@ export async function initVoiceMode() {
 }
 
 export function startVoiceDetection() {
-    // 如果辨識系統已經在運作中（isDetecting 為 true），就直接跳出。
-    // 這避免了玩家多次點擊切換按鈕，導致同時產生多個語音辨識實體（Instance），這會造成嚴重的效能問題與判定混亂。
-    if (isDetecting) return; 
-    isDetecting = true;
+    // 🌟 強制設定偵測狀態
+    isDetecting = true; 
     
-    if (recognitionMouth) { //如果「嘴型模式」的辨識物件還開著，先強制關掉它。這確保了系統資源（麥克風）能完全保留給目前的「發聲模式」。
-        try { recognitionMouth.stop(); } catch(e){}
-    }
-
-    if (recognition) { //剛呼叫 .stop() 就立刻呼叫 .start()有可能出錯這裡延遲一點時間在呼叫
-        try { recognition.stop(); } catch(e){}
-        setTimeout(() => { try { recognition.start(); } catch(e){} }, 100);
-    }
-
+    // 呼叫你的原生 API 啟動
+    // if (recognition) {
+    //     try { recognition.stop(); } catch(e){}
+    //     setTimeout(() => { 
+    //         try { 
+    //             recognition.start(); 
+    //             console.log("🎤 原生 API 啟動成功，偵測狀態：", isDetecting);
+    //         } catch(e){} 
+    //     }, 200); // 給一點緩衝時間讓硬體切換
+    // }
     //如果遊戲開始在進行題目渲染
     if(isGameRunning){
         predictLoop(); //AI 模型判定主迴圈（例如臉部追蹤或是音量頻譜分析）呼叫它代表「判定引擎」正式開始運轉，每一幀都會去檢查玩家有沒有達成動作
@@ -120,29 +205,6 @@ function triggerStoneHit() {
     if (hitCooldown) return; 
     hitCooldown = true;
     voiceConfig.remainingHits--; //將這顆石頭的剩餘需要打擊次數減 1。
-    
-    // if (voiceConfig.remainingHits > 0) {
-    //     // 狀態 A：還沒碎，觸發受擊動畫
-    //     stoneAnimState = "hit"; 
-    //     renderBelt(); // 叫畫家畫出扣血跟震動
-        
-    //     setTimeout(() => { 
-    //         stoneAnimState = "normal"; 
-    //         renderBelt(); // 震動結束，恢復正常
-    //         hitCooldown = false; 
-    //     }, 400);
-        
-    // } else {
-    //     // 狀態 B：碎了，準備過關！
-    //     stoneAnimState = "explode";
-    //     renderBelt(); // 叫畫家畫出爆炸
-        
-    //     // 給予1秒鐘的時間顯示爆炸動畫後，交給總結算中心
-    //     setTimeout(() => {
-    //         triggerResult(true); // 🌟 過關結算交給它！
-    //         hitCooldown = false; 
-    //     }, 1000); 
-    // }
     const stone = document.getElementById("stone-container");
     const hp = document.getElementById("stone-hp");
 

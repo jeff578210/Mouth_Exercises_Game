@@ -76,29 +76,29 @@ export async function initMouthMode() {
     }
 
     // 辨識發出的語音,無限循環
-    // const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    // if (SpeechRecognition) {
-    //     recognitionMouth = new SpeechRecognition();
-    //     recognitionMouth.continuous = true;
-    //     recognitionMouth.interimResults = true;
-    //     recognitionMouth.lang = 'zh-TW';
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+        recognitionMouth = new SpeechRecognition();
+        recognitionMouth.continuous = true;
+        recognitionMouth.interimResults = true;
+        recognitionMouth.lang = 'zh-TW';
 
-    //     recognitionMouth.onresult = (event) => {
-    //         if (!isDetecting || currentTrainingMode !== 'mouth' || !isGameRunning) return;
-    //         let currentTranscript = "";
-    //         for (let i = event.resultIndex; i < event.results.length; i++) {
-    //             currentTranscript += event.results[i][0].transcript.toLowerCase();
-    //         }
-    //         latestSpokenWord = currentTranscript; 
-    //         console.log(`[嘴型模式-收音] 聽到: "${latestSpokenWord}"`);
-    //     };
+        recognitionMouth.onresult = (event) => {
+            if (!isDetecting || currentTrainingMode !== 'mouth' || !isGameRunning) return;
+            let currentTranscript = "";
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                currentTranscript += event.results[i][0].transcript.toLowerCase();
+            }
+            latestSpokenWord = currentTranscript; 
+            console.log(`[嘴型模式-收音] 聽到: "${latestSpokenWord}"`);
+        };
 
-    //     recognitionMouth.onend = () => {
-    //         if (isDetecting && currentTrainingMode === 'mouth') {
-    //             try { recognitionMouth.start(); } catch(e){}
-    //         }
-    //     };
-    // }
+        recognitionMouth.onend = () => {
+            if (isDetecting && currentTrainingMode === 'mouth') {
+                try { recognitionMouth.start(); } catch(e){}
+            }
+        };
+    }
 
     console.log("✅ 嘴型模式初始化完成");
 }

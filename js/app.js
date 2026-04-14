@@ -7,8 +7,7 @@ import { VRMLoaderPlugin } from '@pixiv/three-vrm';
 
 import { initMouthMode, startMouthDetection, stopMouthDetection, resumeAudio, setMicStatus } from './mode_mouth.js'; // 👈 確保有 setMicStatus
 import { initTongueMode, startTongueDetection, stopTongueDetection } from './mode_tongue.js';
-import { initVoiceMode, startVoiceDetection, stopVoiceDetection, voiceConfig} from './mode_voice.js';
-import { createModel } from 'vosk-browser';
+import { initVoiceMode, startVoiceDetection, stopVoiceDetection, voiceConfig,stopTfjsDetection,initTfjsVoice,startTfjsDetection} from './mode_voice.js';
 
 // ==========================================
 // 全域變數匯出 (讓其他模組可以使用)
@@ -20,7 +19,6 @@ export let currentTrainingMode = "mouth";
 export let poseQueue = [];
 export let isTutorialLocked = false;
 export let accumulatedHoldTime = 0;
-let recognizer = null; //vosk語音辨識
 
 export const DIFFICULTY_CONFIG = {
     tutorial: { requireAudio: true, volThreshold: 15, holdDuration: 1500, accumulateProgress: true, isTutorial: true, jaw_A: 0.25, pucker_U: 0.4, funnel_O: 0.25, stretch_I: 0.3, stretch_E: 0.15 },
@@ -47,10 +45,19 @@ bgm.volume = 0.25;
 // ==========================================
 async function startSystem() {
     initThreeJS(); 
-    await initVosk();
-    await initMouthMode();
-    await initVoiceMode();
-    await initTongueMode();
+    try {
+        await Promise.all([
+            await initMouthMode(),
+            await initVoiceMode(),
+            await initTongueMode(),
+
+            await initTfjsVoice() //語音TM model
+        ]);
+        
+        console.log("✅ 所有 AI 大腦已載入完成");
+    } catch (err) {
+        console.error("❌ 模型載入發生錯誤", err);
+    }
     
     // 系統載入完成後，立刻啟動背景頭部/嘴部追蹤，永遠不關閉 
     startMouthDetection(); 
@@ -63,53 +70,6 @@ async function startSystem() {
         const btn = document.getElementById(id);
         if(btn) btn.disabled = false;
     });
-}
-async function initVosk() {
-    if (recognizer) return;
-    console.log("⏳ 正在載入 Vosk 英文模型...");
-    
-    try {
-        // 🌟 指向 public 資料夾裡的模型路徑
-        const modelUrl = './vosk_model/vosk-model-small-en-us-0.15.zip'; 
-        
-        const model = await createModel(modelUrl);
-        recognizer = new model.KaldiRecognizer(16000);
-        
-        // 設定要聽 partialresult (短促發音用這個最快！)
-        recognizer.on("partialresult", (message) => {
-            const transcript = message.result.partial.toLowerCase();
-            if (transcript) handleTranscript(transcript);
-        });
-
-        console.log("✅ Vosk 英文模型載入完成！");
-    } catch (error) {
-        console.error("❌ Vosk 初始化失敗:", error);
-    }
-}
-
-export function handleTranscript(text) {
-    console.log(`[聽到聲音]: "${text}"`);
-
-    // 取得當前的目標音節 (從 poseQueue 或你的變數來)
-    const targetPose = poseQueue[0]; 
-
-    // 建立英文辨識結果的容錯對照表
-    const dictionary = {
-        "PA": ["pa", "pop", "part", "path", "pad", "puff", "pal"],
-        "TA": ["ta", "top", "tap", "tall", "tart", "time", "tie"],
-        "KA": ["ka", "car", "cop", "cot", "cut", "come", "call"],
-        "LA": ["la", "lap", "lot", "laugh", "love", "lie"]
-    };
-
-    // 檢查辨識出來的文字，有沒有包含在我們的容錯字典裡
-    const validWords = dictionary[targetPose] || [];
-    
-    // 如果聽到的句子裡，包含任何一個容錯單字，就判定過關！
-    const isHit = validWords.some(word => text.includes(word));
-
-    if (isHit) {
-        console.log(`🎯 命中目標！喊出了 ${targetPose}`);
-    }
 }
 
 function initThreeJS() {
@@ -204,6 +164,7 @@ document.getElementById("mode-tongue")?.addEventListener('click', () => switchTr
 
 function switchTrainingMode(mode) {
     if (isGameRunning) return; //遊戲進行中不能更換模式
+    stopAllEngines(); //請除所有的語音偵測辨識冷卻狀態
     currentTrainingMode = mode;
     console.log(`切換至訓練模式：${mode}`);
     // UI 按鈕切換
@@ -257,7 +218,6 @@ function startGame(mode) {
     import('./mode_mouth.js').then(module => {
         if(module.resumeAudio) module.resumeAudio(); 
     });
-
     currentDifficulty = mode; 
     isGameRunning = true;
     isTutorialLocked = (mode === "tutorial"); 
@@ -269,7 +229,6 @@ function startGame(mode) {
     const isMicOff = micBtn && micBtn.classList.contains('off');
     const isEasyMode = (mode === "easy");
     const isTongueMode = (currentTrainingMode === 'tongue'); 
-    const isVoiceMode = (currentTrainingMode === 'voice');
 
     // 🌟 修復 1：動態重置統計資料 (根據不同模式準備不同的計分板)
     gameStats = {};
@@ -281,21 +240,21 @@ function startGame(mode) {
     statKeys.forEach(k => { gameStats[k] = { success: 0, fail: 0 }; });
 
     // 切換 UI 顯示狀態
-    changeUIshow(isVoiceMode);
-    
-
+    changeUIshow(currentTrainingMode === 'voice');
     const meterContainer = document.getElementById("audio-meter-container");
 
     // 🌟 UI 與麥克風強制連動邏輯
     import('./mode_mouth.js').then(module => {
-        if (isVoiceMode) {
+        if (currentTrainingMode === 'voice') {
             // 🗣️ 發聲模式：隱藏按鈕，顯示音量條，並【強制開啟麥克風】
             if (micBtn) { micBtn.style.display = "none"; }
             if (meterContainer) { 
-                meterContainer.style.display = "flex"; 
-                meterContainer.style.visibility = "visible"; 
+                meterContainer.style.display = "none"; 
+                meterContainer.style.visibility = "hidden"; 
             }
             if (module.setMicStatus) module.setMicStatus(true); 
+            // startVoiceDetection();
+            startTfjsDetection();
         } 
         else if (isTongueMode) {
             // 👅 舌頭模式：不需要聲音，全部隱藏
@@ -325,7 +284,7 @@ function endGame() {
     isTutorialLocked = false; 
     bgm.pause();
     window.speechSynthesis.cancel(); 
-    
+    stopAllEngines();
     // 隱藏舌頭的冰淇淋
     const ic = document.getElementById("ice-cream-target");
     if (ic) ic.style.display = "none";
@@ -648,6 +607,21 @@ const els = {
         let el = document.getElementById(id);
         if (el) el.style.display = els[id];
     }
+}
+
+/**
+ * 🧹 全域偵測清理器
+ * 負責把所有正在運行的偵測引擎（語音、模型、計時器）徹底關閉
+ */
+function stopAllEngines() {
+    isGameRunning = false;
+
+    stopVoiceDetection();
+    stopMouthDetection();
+    stopTongueDetection();
+    stopTfjsDetection();
+    
+    console.log("🛑 所有偵測引擎已安全關閉，釋放硬體資源");
 }
 // 啟動系統
 startSystem();
