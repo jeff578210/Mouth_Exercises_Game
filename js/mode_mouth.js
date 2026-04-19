@@ -1,10 +1,7 @@
 // js/mode_mouth.js
-import { FaceLandmarker, FilesetResolver } from "https://cdn.skypack.dev/@mediapipe/tasks-vision@0.10.3";
 import * as THREE from 'three'; 
-import { currentVrm, currentTrainingMode, isGameRunning, currentDifficulty, DIFFICULTY_CONFIG, poseQueue, isTutorialLocked, triggerResult } from './app.js';
+import { currentVrm, currentTrainingMode, isGameRunning, currentDifficulty, DIFFICULTY_CONFIG, poseQueue, isTutorialLocked, triggerResult,videoElement,globalStream,faceLandmarker} from './app.js';
 
-let faceLandmarker;
-let video;
 let isDetecting = false;
 let lastVideoTime = -1;
 
@@ -33,40 +30,15 @@ export function resumeAudio() {
 
 // 初始化 MediaPipe 與攝影機、麥克風、語音辨識
 export async function initMouthMode() {
-    console.log("正在載入 MediaPipe 臉部追蹤與語音辨識模組...");
-    //載入MediaPipe
-    const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
-    faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-        baseOptions: {
-            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
-            delegate: "GPU"
-        },
-        outputFaceBlendshapes: true,
-        outputFacialTransformationMatrixes: true, 
-        runningMode: "VIDEO",
-        numFaces: 1
-    });
-    //載入攝影機、麥克風
-    video = document.getElementById("video"); 
-    if (!video) {
-        video = document.createElement('video');
-        video.id = 'video';
-        video.autoplay = true;
-        video.playsInline = true;
-        video.style.display = 'none';
-        document.body.appendChild(video);
-    }
+    
+    
     //做 音量跳動條 或是判斷玩家 有沒有發出聲音
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        video.srcObject = stream;
-        video.play(); 
-        
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        analyser = audioContext.createAnalyser();
-        const source = audioContext.createMediaStreamSource(stream);
-        source.connect(analyser);
-        analyser.fftSize = 256;
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();  //Web Audio元件
+        analyser = audioContext.createAnalyser(); //頻譜分析元件 音量大小、頻率高低轉換成數據
+        const source = audioContext.createMediaStreamSource(globalStream); //音訊來源
+        source.connect(analyser);//音源連接分析元件
+        analyser.fftSize = 256; //分析解析度頻率
         dataArray = new Uint8Array(analyser.frequencyBinCount);
         isMicEnabled = true;
 
@@ -162,11 +134,10 @@ async function predictLoop() {
         }
     }
 
-    if (video && video.readyState >= 2 && faceLandmarker) {
-        if (lastVideoTime !== video.currentTime) {
-            lastVideoTime = video.currentTime;
-            const results = faceLandmarker.detectForVideo(video, performance.now());
-
+    if (videoElement && videoElement.readyState >= 2 && faceLandmarker) {
+        if (lastVideoTime !== videoElement.currentTime) {
+            lastVideoTime = videoElement.currentTime;
+            const results = faceLandmarker.detectForVideo(videoElement, performance.now());
             // =========================================
             // 🌟 第一階段：物理連動 (維持你原本的完美設計)
             // =========================================
@@ -221,19 +192,17 @@ async function predictLoop() {
                 }
 
                 // 驗證 1：臉部動作是否正確？(保留你原本的 MediaPipe 參數邏輯)
+                
                 let detected = "";
                 if (jawOpen < 0.08 && mouthPucker < 0.5 && mouthStretch < 0.4) {
+                    // 預設狀態
                     detected = "";
-                } else if (mouthFunnel > conf.funnel_O && jawOpen > 0.15) {
-                    detected = "ㄛ";
-                } else if (mouthPucker > conf.pucker_U && jawOpen > 0.05 && jawOpen < 0.3) {
+                } else if (mouthPucker > conf.pucker_U && jawOpen < 0.4) {
                     detected = "ㄨ";
-                } else if (jawOpen > conf.jaw_A && mouthPucker < 0.3 && mouthFunnel < 0.3) {
+                } else if (jawOpen > conf.jaw_A && mouthPucker < 0.3) {
                     detected = "ㄚ";
-                } else if ((mouthStretch > conf.stretch_I || mouthSmile > conf.stretch_I) && jawOpen < 0.15) {
+                } else if (mouthStretch > conf.stretch_I || mouthSmile > conf.stretch_I) {
                     detected = "ㄧ";
-                } else if (jawOpen >= 0.1 && jawOpen <= 0.5 && (mouthStretch > conf.stretch_E || mouthSmile > conf.stretch_E)) {
-                    detected = "ㄟ";
                 }
 
                 let isFaceMatched = (detected === targetPose);

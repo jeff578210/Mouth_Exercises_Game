@@ -1,10 +1,11 @@
 // js/mode_voice.js
-import { currentVrm, currentTrainingMode, isGameRunning, isTutorialLocked, gameStats, poseQueue, triggerResult ,currentDifficulty ,renderBelt } from './app.js';
+import { currentVrm, currentTrainingMode, isGameRunning, isTutorialLocked, gameStats, poseQueue, triggerResult ,currentDifficulty ,renderBelt,faceLandmarker ,videoElement,getVolumeLevel} from './app.js';
 import { analyser, dataArray, isMicEnabled, recognitionMouth } from './mode_mouth.js';
 
 let isDetecting = false; //檢查遊戲有沒有再進行
 let currentTargetSyllable; //當前題目
 let hitCooldown = false; //防止連擊
+let isWaitingForNextSound = false; //防止連擊
 let recognition = null;  //語音偵測物件
 let recognizer; //擴充庫物件
 let isTfjsRunning = false; //Teachable Machine是否執行中
@@ -114,56 +115,16 @@ export function stopTfjsDetection() {
     }
 }
 
-export async function initVoiceMode() {
-    // startVoskDetection();
-   
-
-
-    // const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    // if (SpeechRecognition) {
-    //     recognition = new SpeechRecognition();
-    //     recognition.continuous = true; //設定為持續監聽模式
-    //     recognition.interimResults = true;//API 在使用者「還沒講完一整句話」時，就先回傳暫時的辨識結果
-    //     recognition.lang = 'zh-TW';
-    //     recognition.onresult = (event) => { //如果遊戲沒在進行、正在教學畫面、或處於冷卻時間（hitCooldown，避免一次發音觸發太多次打擊），就直接略過
-    //         console.log(1)
-    //         if (!isDetecting || !isGameRunning || isTutorialLocked || hitCooldown) return;
-    //         for (let i = event.resultIndex; i < event.results.length; i++) {
-    //             const transcript = event.results[i][0].transcript.toLowerCase(); //辨識出的音
-    //             console.log(`[發聲辨識] 聽到: "${transcript}"`); 
-                
-    //             const validWords = SYLLABLE_MAP[currentTargetSyllable]; //currentTargetSyllable當下題目音
-    //             if (validWords && validWords.some(word => transcript.includes(word))) {
-    //                 console.log(`🎯 命中目標音: ${currentTargetSyllable}!`);
-    //                 triggerStoneHit();
-    //                 try { recognition.stop(); } catch(e){}
-    //                 break; 
-    //             }
-    //         }
-    //     };
-
-    //     recognition.onend = () => { //確保遊戲持續時聲音偵測不會斷掉
-    //         if (isDetecting && isGameRunning) {
-    //             try { recognition.start(); } catch(e){}
-    //         }
-    //     };
-    // }
-}
 
 export function startVoiceDetection() {
-    // 🌟 強制設定偵測狀態
-    isDetecting = true; 
+    if (isDetecting) return;
+    isDetecting = true;
     
-    // 呼叫你的原生 API 啟動
-    // if (recognition) {
-    //     try { recognition.stop(); } catch(e){}
-    //     setTimeout(() => { 
-    //         try { 
-    //             recognition.start(); 
-    //             console.log("🎤 原生 API 啟動成功，偵測狀態：", isDetecting);
-    //         } catch(e){} 
-    //     }, 200); // 給一點緩衝時間讓硬體切換
-    // }
+    if (recognitionMouth) { //檢查是否開啟語音判定
+        try { recognitionMouth.stop(); } catch(e){}
+        setTimeout(() => { try { recognitionMouth.start(); } catch(e){} }, 100);
+    }
+    
     //如果遊戲開始在進行題目渲染
     if(isGameRunning){
         predictLoop(); //AI 模型判定主迴圈（例如臉部追蹤或是音量頻譜分析）呼叫它代表「判定引擎」正式開始運轉，每一幀都會去檢查玩家有沒有達成動作
@@ -181,11 +142,12 @@ function predictLoop() {
         return;
     }
 
-    if (isMicEnabled && analyser) {
+    let currentVolume
+    if (analyser) {
         analyser.getByteFrequencyData(dataArray);
         let sum = 0;
         for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
-        let currentVolume = sum / dataArray.length;
+        currentVolume = sum / dataArray.length;
 
         // 🌟 核心修復 3：改抓正確的 ID `meter-fill`
         const meterFill = document.getElementById("meter-fill");
@@ -193,13 +155,32 @@ function predictLoop() {
             meterFill.style.width = Math.min((currentVolume / 80) * 100, 100) + "%";
             meterFill.style.backgroundColor = "#e74c3c"; // 發聲模式專屬的紅色音量條
         }
+    }
 
-        if (currentVrm) {
-            currentVrm.expressionManager.setValue('aa', Math.min(currentVolume / 40, 1.0));
+    const results = faceLandmarker.detectForVideo(videoElement, performance.now());
+    let jawOpen = 0, mouthPucker = 0, mouthStretch = 0, mouthSmile = 0, mouthFunnel = 0;
+
+    if (results.faceBlendshapes && results.faceBlendshapes.length > 0) {
+        const shapes = results.faceBlendshapes[0].categories;
+        jawOpen = shapes.find(s => s.categoryName === "jawOpen")?.score || 0;
+    }
+    let volumeLevel = getVolumeLevel();
+    if (currentVolume > volumeLevel) {
+        if (!isWaitingForNextSound && jawOpen > 0.1 && !hitCooldown) {
+            triggerStoneHit();
+            isWaitingForNextSound = true; // 聲音上鎖
+        }
+    } 
+    else if (currentVolume < 10) { 
+        if (isWaitingForNextSound && !hitCooldown) {
+            isWaitingForNextSound = false;
         }
     }
+
     requestAnimationFrame(predictLoop);
 }
+
+
 
 function triggerStoneHit() {
     if (hitCooldown) return; 

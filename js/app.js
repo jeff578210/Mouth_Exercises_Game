@@ -4,10 +4,10 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
+import { FaceLandmarker, FilesetResolver } from "https://cdn.skypack.dev/@mediapipe/tasks-vision@0.10.3";
 
-import { initMouthMode, startMouthDetection, stopMouthDetection, resumeAudio, setMicStatus } from './mode_mouth.js'; // 👈 確保有 setMicStatus
-import { initTongueMode, startTongueDetection, stopTongueDetection } from './mode_tongue.js';
-import { initVoiceMode, startVoiceDetection, stopVoiceDetection, voiceConfig,stopTfjsDetection,initTfjsVoice,startTfjsDetection} from './mode_voice.js';
+import { initMouthMode, startMouthDetection, stopMouthDetection, resumeAudio, setMicStatus } from './mode_mouth.js';
+import { startVoiceDetection,stopVoiceDetection ,voiceConfig,stopTfjsDetection,initTfjsVoice,startTfjsDetection} from './mode_voice.js';
 
 // ==========================================
 // 全域變數匯出 (讓其他模組可以使用)
@@ -19,7 +19,11 @@ export let currentTrainingMode = "mouth";
 export let poseQueue = [];
 export let isTutorialLocked = false;
 export let accumulatedHoldTime = 0;
+export let videoElement;//全域的攝影機
+export let globalStream;//影像與聲音源頭,後續運算都可以從這邊拿資料
+export let faceLandmarker;//MediaPipe元件
 
+//各等級辨識參數
 export const DIFFICULTY_CONFIG = {
     tutorial: { requireAudio: true, volThreshold: 15, holdDuration: 1500, accumulateProgress: true, isTutorial: true, jaw_A: 0.25, pucker_U: 0.4, funnel_O: 0.25, stretch_I: 0.3, stretch_E: 0.15 },
     easy: { requireAudio: false, volThreshold: 0, holdDuration: 2000, accumulateProgress: true, isTutorial: false, jaw_A: 0.25, pucker_U: 0.4, funnel_O: 0.25, stretch_I: 0.3, stretch_E: 0.15 },
@@ -38,32 +42,87 @@ export let gameStats = {};
 // 音效設定
 const bgm = new Audio('./bgm.mp3');
 bgm.loop = true;
-bgm.volume = 0.25; 
+bgm.volume = 1; 
 
 // ==========================================
 // 1. 初始化系統與 3D 渲染
 // ==========================================
 async function startSystem() {
     initThreeJS(); 
-    try {
-        await Promise.all([
-            await initMouthMode(),
-            await initVoiceMode(),
-            await initTongueMode(),
+    await initMediaPipe();
+    await initCamera();
+    await initMouthMode();
+    // await initTfjsVoice();
+    // try {
+    //     await Promise.all([
+    //         await initMouthMode(),
 
-            await initTfjsVoice() //語音TM model
-        ]);
+    //         await initTfjsVoice() //語音TM model
+    //     ]);
         
-        console.log("✅ 所有 AI 大腦已載入完成");
-    } catch (err) {
-        console.error("❌ 模型載入發生錯誤", err);
-    }
+    //     console.log("✅ 所有 AI 大腦已載入完成");
+    // } catch (err) {
+    //     console.error("❌ 模型載入發生錯誤", err);
+    // }
     
     // 系統載入完成後，立刻啟動背景頭部/嘴部追蹤，永遠不關閉 
     startMouthDetection(); 
-    startTongueDetection();
 
     //隱藏請稍候提示,顯示開始遊戲按鈕
+    unlockGameUI();
+}
+
+async function initMediaPipe(){
+    console.log("正在載入 MediaPipe 臉部追蹤與語音辨識模組...");
+    //載入MediaPipe
+        const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
+        faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+            baseOptions: {
+                modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
+                delegate: "GPU"
+            },
+            outputFaceBlendshapes: true,
+            outputFacialTransformationMatrixes: true, 
+            runningMode: "VIDEO",
+            numFaces: 1
+        });
+}
+
+export async function initCamera() {
+    console.log("📷 正在啟動全域攝影機與麥克風...");
+    
+    // 1. 建立或取得唯一的 video 標籤
+    videoElement = document.getElementById("video");
+    if (!videoElement) {
+        videoElement = document.createElement('video');
+        videoElement.id = 'video';
+        videoElement.autoplay = true;
+        videoElement.playsInline = true;
+        videoElement.style.display = 'none';
+        document.body.appendChild(videoElement);
+    }
+
+    // 2. 要求硬體權限
+    try {
+        globalStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        videoElement.srcObject = globalStream;
+
+        // 🌟 關鍵：必須等 video 準備好，才算真的載入完成
+        return new Promise((resolve) => {
+            videoElement.onloadedmetadata = () => {
+                videoElement.play();
+                console.log("✅ 全域攝影機與麥克風啟動完成");
+                resolve();
+            };
+        });
+    } catch (err) {
+        console.error("❌ 無法取得攝影機或麥克風權限", err);
+        alert("請允許使用攝影機與麥克風才能進行遊戲！");
+        throw err; // 把錯誤往上丟，阻止後續載入
+    }
+}
+
+function unlockGameUI(){
     document.getElementById("loading-overlay").style.display = "none";
     const btns = ["btn-tutorial", "btn-easy", "btn-medium", "btn-hard"];
     btns.forEach(id => {
@@ -115,21 +174,7 @@ function initThreeJS() {
     clock = new THREE.Clock();
     animate3D();
 }
-// 🌟 視窗大小監聽：當螢幕翻轉或改變尺寸時，重新計算 3D 畫面比例
-window.addEventListener('resize', () => {
-    const container = document.querySelector('.left-panel');
-    // 確保 renderer 和 camera 有被正確宣告且可以使用
-    if (container && typeof renderer !== 'undefined' && typeof camera !== 'undefined') {
-        const width = container.clientWidth;
-        const height = container.clientHeight;
-        
-        // 更新畫布大小
-        renderer.setSize(width, height);
-        // 更新攝影機比例
-        camera.aspect = width / height;
-        camera.updateProjectionMatrix();
-    }
-});
+
 function animate3D() {
     requestAnimationFrame(animate3D);
     const deltaTime = clock.getDelta();
@@ -244,39 +289,55 @@ function startGame(mode) {
     const meterContainer = document.getElementById("audio-meter-container");
 
     // 🌟 UI 與麥克風強制連動邏輯
-    import('./mode_mouth.js').then(module => {
-        if (currentTrainingMode === 'voice') {
+    if (currentTrainingMode === 'voice') {
             // 🗣️ 發聲模式：隱藏按鈕，顯示音量條，並【強制開啟麥克風】
             if (micBtn) { micBtn.style.display = "none"; }
-            if (meterContainer) { 
-                meterContainer.style.display = "none"; 
-                meterContainer.style.visibility = "hidden"; 
-            }
-            if (module.setMicStatus) module.setMicStatus(true); 
-            // startVoiceDetection();
-            startTfjsDetection();
-        } 
-        else if (isTongueMode) {
-            // 👅 舌頭模式：不需要聲音，全部隱藏
-            if (micBtn) { micBtn.style.display = "none"; }
-            if (meterContainer) { meterContainer.style.display = "none"; }
-        } 
-        else {
-            // 👄 嘴型模式：依據難度顯示
-            if (micBtn) {
-                micBtn.style.display = "block";
-                micBtn.style.display = isEasyMode ? "none" : "block";
-            }
-            if (meterContainer) {
-                meterContainer.style.display = "flex";
-                meterContainer.style.visibility = (isEasyMode || isMicOff) ? "hidden" : "visible";
-            }
-            if (module.setMicStatus) module.setMicStatus(!isMicOff);
+            setMicStatus(true); 
+            startVoiceDetection();
+    } 
+    else if (isTongueMode) {
+        // 👅 舌頭模式：不需要聲音，全部隱藏
+        if (micBtn) { micBtn.style.display = "none"; }
+        if (meterContainer) { meterContainer.style.display = "none"; }
+    } 
+    else {
+        // 👄 嘴型模式：依據難度顯示
+        if (micBtn) {
+            micBtn.style.display = "block";
+            micBtn.style.display = isEasyMode ? "none" : "block";
         }
-    });
-    initQueue(); 
-    renderBelt(); 
+        if (meterContainer) {
+            meterContainer.style.display = "flex";
+            meterContainer.style.visibility = (isEasyMode || isMicOff) ? "hidden" : "visible";
+        }
+        setMicStatus(!isMicOff);
+    }
+
+    let volumeLevel = getVolumeLevel();
+    const thresholdLine = document.getElementById("meter-threshold");
+    if (thresholdLine) {
+        let leftPercentage = (volumeLevel / 80) * 100;
+        leftPercentage = Math.min(leftPercentage, 100);
+        // 更新 CSS 的 left 屬性
+        thresholdLine.style.left = `${leftPercentage}%`;
+    }
+
+    initQueue();  //載入題目
+    renderBelt(); //渲染畫面
     startTurnTimer();
+}
+
+export function getVolumeLevel(){
+    let num ;
+    if(currentDifficulty === "hard"){
+        num = 40;
+    }else if(currentDifficulty === "medium"){
+        num = 30;
+    }else{
+        num = 20;
+    }
+
+    return num;
 }
 
 function endGame() {
@@ -385,7 +446,6 @@ function initQueue() {
 
 //不管任何狀態只要呼叫就將輸送帶重新渲染
 export function renderBelt() {
-    // 防呆：如果題庫是空的，就不需要畫畫面
     if (poseQueue.length === 0) return;
     if (currentTrainingMode === 'voice') {
         // ==========================================
@@ -442,47 +502,18 @@ function startTurnTimer() {
     if (currentTrainingMode === 'mouth') {
         spokenText = `請跟著喊：${targetPose}`
     } else if (currentTrainingMode === 'voice') {
-        spokenText = `大聲喊出：${targetPose}`
+        let targetString;
+        if (targetPose === 'PA') targetString = '趴';
+        else if (targetPose === 'TA') targetString = '他';
+        else if (targetPose === 'KA') targetString = '咖';
+        else if (targetPose === 'LA') targetString = '拉';
+        spokenText = `大聲喊出：${targetString}`
     } else if (currentTrainingMode === 'tongue') {
         if (targetPose === '⬆️') spokenText = '舌頭往上';
         else if (targetPose === '⬇️') spokenText = '舌頭往下';
         else if (targetPose === '⬅️') spokenText = '舌頭往左';
         else if (targetPose === '➡️') spokenText = '舌頭往右';
     }
-
-    // ==========================================
-    // 🍦 冰淇淋召喚術：精準定位在 3D 模型框內
-    // ==========================================
-    let ic = document.getElementById('ice-cream-target');
-    if (!ic) {
-        ic = document.createElement('div');
-        ic.id = 'ice-cream-target';
-        ic.innerText = '🍦';
-        
-        // 👇 核心修改：尋找 3D 畫布，把冰淇淋塞進它的父元素裡面
-        const canvas3D = document.querySelector('canvas');
-        if (canvas3D && canvas3D.parentElement) {
-            canvas3D.parentElement.style.position = 'relative'; // 確保父元素可以定位
-            canvas3D.parentElement.appendChild(ic);
-        } else {
-            document.body.appendChild(ic); // 備用方案
-        }
-    }
-    
-    // 清除舊動畫與位置
-    ic.className = ''; 
-    
-    if (currentTrainingMode === 'tongue') {
-        ic.style.display = 'block';
-        // 根據箭頭決定冰淇淋位置
-        if (targetPose === '⬆️') ic.classList.add('ic-up');
-        else if (targetPose === '⬇️') ic.classList.add('ic-down');
-        else if (targetPose === '⬅️') ic.classList.add('ic-left');
-        else if (targetPose === '➡️') ic.classList.add('ic-right');
-    } else {
-        ic.style.display = 'none'; // 如果不是舌頭模式就隱藏
-    }
-    // ==========================================
 
     const currentBubble = document.getElementById("bubble-0");//取得最左邊泡泡
     const stone = document.getElementById("stone-container"); //取得石頭
@@ -615,13 +646,9 @@ const els = {
  */
 function stopAllEngines() {
     isGameRunning = false;
-
-    stopVoiceDetection();
     stopMouthDetection();
-    stopTongueDetection();
     stopTfjsDetection();
-    
-    console.log("🛑 所有偵測引擎已安全關閉，釋放硬體資源");
+    stopVoiceDetection();
 }
 // 啟動系統
 startSystem();
