@@ -1,5 +1,5 @@
 // ==========================================
-// 核心模組載入 (總指揮官)
+// 核心模組載入
 // ==========================================
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -8,9 +8,10 @@ import { FaceLandmarker, FilesetResolver } from "https://cdn.skypack.dev/@mediap
 
 import { initMouthMode, startMouthDetection, stopMouthDetection, resumeAudio, setMicStatus } from './mode_mouth.js';
 import { startVoiceDetection,stopVoiceDetection ,voiceConfig,stopTfjsDetection,initTfjsVoice,startTfjsDetection} from './mode_voice.js';
+import { initTongueMode,startTongueDetection} from './mode_tongue.js';
 
 // ==========================================
-// 全域變數匯出 (讓其他模組可以使用)
+// 全域變數匯出
 // ==========================================
 export let currentVrm = null;
 export let isGameRunning = false;
@@ -40,9 +41,14 @@ let nextBlinkInterval = 3;
 export let gameStats = {};
 
 // 音效設定
+// 🔥 偵測是否為行動裝置(用於降低 BGM 音量,避免外放被麥克風收回造成回音)
+const IS_MOBILE = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+                  || (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform)); // iPad iOS 13+
 const bgm = new Audio('./bgm.mp3');
 bgm.loop = true;
-bgm.volume = 1; 
+bgm.preload = 'auto';
+// 手機外放會被麥克風收音造成回音,大幅降低音量
+bgm.volume = IS_MOBILE ? 0.35 : 0.8;
 
 // ==========================================
 // 1. 初始化系統與 3D 渲染
@@ -53,20 +59,11 @@ async function startSystem() {
     await initCamera();
     await initMouthMode();
     // await initTfjsVoice();
-    // try {
-    //     await Promise.all([
-    //         await initMouthMode(),
-
-    //         await initTfjsVoice() //語音TM model
-    //     ]);
-        
-    //     console.log("✅ 所有 AI 大腦已載入完成");
-    // } catch (err) {
-    //     console.error("❌ 模型載入發生錯誤", err);
-    // }
+    await initTongueMode();
     
     // 系統載入完成後，立刻啟動背景頭部/嘴部追蹤，永遠不關閉 
     startMouthDetection(); 
+    startTongueDetection();
 
     //隱藏請稍候提示,顯示開始遊戲按鈕
     unlockGameUI();
@@ -88,9 +85,71 @@ async function initMediaPipe(){
         });
 }
 
+// 🔥 PeerConnection Loopback Hack:
+// 修正 Chromium 已知問題 — 當 MediaStream 被 Web Audio 的 createMediaStreamSource 使用時,
+// 瀏覽器會自動把回音消除 (AEC) 關掉。透過把音訊軌經過一個本地 RTCPeerConnection
+// 「來回繞一圈」,可以強制保留 AEC 處理過的音訊。
+// 參考: https://bugs.chromium.org/p/chromium/issues/detail?id=687574
+async function applyAECLoopback(originalStream) {
+    try {
+        const audioTracks = originalStream.getAudioTracks();
+        if (!audioTracks.length || typeof RTCPeerConnection === 'undefined') {
+            return originalStream;
+        }
+
+        const offerOptions = {
+            offerToReceiveAudio: false,
+            offerToReceiveVideo: false,
+        };
+        const rtcConfig = { iceServers: [] };
+
+        const senderPC = new RTCPeerConnection(rtcConfig);
+        const receiverPC = new RTCPeerConnection(rtcConfig);
+
+        // ICE 互相轉送
+        senderPC.onicecandidate = e => e.candidate && receiverPC.addIceCandidate(e.candidate).catch(()=>{});
+        receiverPC.onicecandidate = e => e.candidate && senderPC.addIceCandidate(e.candidate).catch(()=>{});
+
+        // 把音訊軌加進 sender (只送音訊,影像仍走原 stream)
+        audioTracks.forEach(track => senderPC.addTrack(track, originalStream));
+
+        // 接收端收到的軌道組成回路 stream
+        const loopbackStream = new MediaStream();
+        const waitTrack = new Promise(resolve => {
+            receiverPC.ontrack = (e) => {
+                loopbackStream.addTrack(e.track);
+                resolve();
+            };
+        });
+
+        // SDP 交握
+        const offer = await senderPC.createOffer(offerOptions);
+        await senderPC.setLocalDescription(offer);
+        await receiverPC.setRemoteDescription(offer);
+        const answer = await receiverPC.createAnswer();
+        await receiverPC.setLocalDescription(answer);
+        await senderPC.setRemoteDescription(answer);
+
+        // 等接收端真的拿到 track
+        await Promise.race([
+            waitTrack,
+            new Promise(r => setTimeout(r, 1500))
+        ]);
+
+        // 把原始的影像軌也合進新 stream (給 video 元素用)
+        originalStream.getVideoTracks().forEach(t => loopbackStream.addTrack(t));
+
+        console.log('🛡️ AEC Loopback 已啟用,回音消除將維持有效');
+        return loopbackStream;
+    } catch (err) {
+        console.warn('AEC Loopback 失敗,回退到原始 stream:', err);
+        return originalStream;
+    }
+}
+
 export async function initCamera() {
     console.log("📷 正在啟動全域攝影機與麥克風...");
-    
+
     // 1. 建立或取得唯一的 video 標籤
     videoElement = document.getElementById("video");
     if (!videoElement) {
@@ -98,19 +157,57 @@ export async function initCamera() {
         videoElement.id = 'video';
         videoElement.autoplay = true;
         videoElement.playsInline = true;
+        videoElement.muted = true; // 🔥 防止 video 元素自己播出聲音造成第二層回音
         videoElement.style.display = 'none';
         document.body.appendChild(videoElement);
     }
+    // 確保 video 元素本身不發聲(行動裝置易被忽略)
+    videoElement.muted = true;
+    videoElement.volume = 0;
 
-    // 2. 要求硬體權限
+    // 2. 要求硬體權限,明確開啟回音消除、噪音抑制、自動增益
     try {
-        globalStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        const constraints = {
+            video: {
+                facingMode: 'user',
+                width:  { ideal: 640 },
+                height: { ideal: 480 }
+            },
+            audio: {
+                echoCancellation: { ideal: true },
+                noiseSuppression: { ideal: true },
+                autoGainControl:  { ideal: true },
+                // 強制使用瀏覽器內建的較強 AEC 模式 (僅 Chromium 系)
+                googEchoCancellation: true,
+                googEchoCancellation2: true,
+                googNoiseSuppression: true,
+                googNoiseSuppression2: true,
+                googAutoGainControl: true,
+                googHighpassFilter: true,
+                channelCount: 1, // 單聲道更利於 AEC
+                sampleRate:   { ideal: 48000 }
+            }
+        };
+        const rawStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+        // 🔥 用 loopback hack 確保即使後面接 Web Audio,AEC 仍生效
+        globalStream = await applyAECLoopback(rawStream);
+
+        // 印出實際生效的音訊限制條件,方便除錯
+        const aSettings = globalStream.getAudioTracks()[0]?.getSettings?.() || {};
+        console.log('🎙️ 音訊實際設定:', {
+            echoCancellation: aSettings.echoCancellation,
+            noiseSuppression: aSettings.noiseSuppression,
+            autoGainControl:  aSettings.autoGainControl,
+            sampleRate:       aSettings.sampleRate
+        });
+
         videoElement.srcObject = globalStream;
 
         // 🌟 關鍵：必須等 video 準備好，才算真的載入完成
         return new Promise((resolve) => {
             videoElement.onloadedmetadata = () => {
-                videoElement.play();
+                videoElement.play().catch(()=>{});
                 console.log("✅ 全域攝影機與麥克風啟動完成");
                 resolve();
             };
@@ -173,6 +270,41 @@ function initThreeJS() {
 
     clock = new THREE.Clock();
     animate3D();
+
+    // 🔥 RWD：監聽視窗 / 容器尺寸變化,自動重繪 3D 畫面
+    // 使用 ResizeObserver 可以同時應對視窗 resize、orientation 變化、與面板 flex 重排
+    // ⚠️ 相機框景在所有版面都保持一致(電腦版的「頭到肩膀」特寫)。
+    //    寬扁畫面(平板/手機堆疊)只是水平視野變寬,垂直框景與電腦版完全相同,
+    //    確保虛擬人物從頭到肩膀的部分維持一樣的呈現方式。
+    const resize3D = () => {
+        if (!renderer || !camera) return;
+        const w = container.clientWidth;
+        const h = container.clientHeight;
+        if (w === 0 || h === 0) return;
+
+        // 統一相機位置:與電腦版左右分屏相同(頭部正面特寫)
+        camera.position.set(0, 1.52, 0.8);
+        camera.lookAt(0, 1.52, 0);
+
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, h, false);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    };
+    if (typeof ResizeObserver !== 'undefined') {
+        const ro = new ResizeObserver(resize3D);
+        ro.observe(container);
+    }
+    window.addEventListener('resize', resize3D);
+    window.addEventListener('orientationchange', () => {
+        // 旋轉螢幕後常會有 0.x 秒的視窗高度沒立刻更新,延遲再算一次
+        setTimeout(resize3D, 150);
+        setTimeout(resize3D, 500);
+    });
+    // 🔥 載入完成立刻校正一次,避免初始閃爍(原本是固定電腦框景)
+    resize3D();
+    // 雙保險:dom 完成排版後再呼叫一次
+    requestAnimationFrame(resize3D);
 }
 
 function animate3D() {

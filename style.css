@@ -13,19 +13,23 @@
 }
 
 body {
-    margin: 0; padding: 0; 
+    margin: 0; padding: 0;
     font-family: 'jf-openhuninn', 'Segoe UI', "Microsoft JhengHei", Tahoma, sans-serif;
-    height: 100vh; overflow: hidden;
-    
+    /* 🔥 RWD：電腦版維持滿版不滾動,平板/手機改由 @media 開啟滾動 */
+    height: 100vh;
+    height: 100dvh; /* 動態視窗高度,適應行動瀏覽器網址列伸縮 */
+    overflow: hidden;
+
     /* 🔥 升級：疊加半透明可愛圓點 + 溫暖動態漸層 */
-    background: 
+    background:
         radial-gradient(circle, rgba(255,255,255,0.4) 15%, transparent 16%),
         radial-gradient(circle, rgba(255,255,255,0.4) 15%, transparent 16%),
         linear-gradient(-45deg, #ffe259, #ffa751, #a1c4fd, #c2e9fb);
     background-size: 60px 60px, 60px 60px, 400% 400%; /* 圓點的大小與間距 */
     background-position: 0 0, 30px 30px, 0% 50%;
-    
+
     animation: gradientBG 15s ease infinite;
+    -webkit-text-size-adjust: 100%; /* 防止 iOS 旋轉時字體被自動放大 */
 }
 
 /* 🔥 優化 1：移除左側面板的覆蓋層與模糊，露出 3D 草原 */
@@ -50,8 +54,9 @@ body {
 /* 左右分屏佈局 */
 .main-layout {
     display: flex; width: 100vw; height: 100vh;
+    height: 100dvh; /* 動態視窗高度 */
 }
-#canvas-container { width: 100%; height: 100%; }
+#canvas-container { width: 100%; height: 100%; min-height: 240px; }
 
 .right-panel {
     flex: 5; 
@@ -185,6 +190,11 @@ button {
     padding: 12px 30px; font-size: 18px; font-weight: bold; color: white;
     background-color: #3498db; border: none; border-radius: 30px; cursor: pointer;
     box-shadow: 0 4px 6px rgba(0,0,0,0.2); transition: background 0.2s;
+    /* 🔥 觸控相容:消除 iOS 點擊延遲與灰色閃光 */
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: rgba(0,0,0,0);
+    user-select: none;
+    -webkit-user-select: none;
 }
 button:hover { background-color: #2980b9; }
 button:disabled { background-color: #95a5a6; cursor: not-allowed; }
@@ -477,100 +487,355 @@ button:disabled { background-color: #95a5a6; cursor: not-allowed; }
 }
 
 /* =========================================
-   📱 響應式設計 (RWD) - 平板與窄螢幕適應
+   📱 響應式設計 (RWD)
+   斷點規劃:
+     - ≥1200px        : 桌面電腦(預設)左右分屏 50/50
+     - 992 ~ 1199px   : 小型筆電 / 平板橫向(左右分屏,字級縮小)
+     - 600 ~ 991px    : 平板直向(上下堆疊,3D 在上,控制在下)
+     - <600px         : 手機(更緊湊上下堆疊)
    ========================================= */
-@media (max-width: 950px) {
-    /* 1. 將主排版改為上下排列，並允許整個畫面滾動 */
-    .main-layout {
-        flex-direction: column !important;
-        height: auto !important;
-        overflow-y: auto !important;
-    }
 
-    /* 2. 上方區塊：虛擬人物 (固定高度，避免太扁或太長) */
-    .left-panel {
-        width: 100% !important;
-        height: 45vh !important; 
-        min-height: 350px !important;
-        border-right: none !important;
-        border-bottom: 3px solid #bdc3c7; /* 加上分隔線 */
-    }
-
-    /* 3. 下方區塊：遊戲互動區 (高度自動往下長) */
+/* -------- 1) 小筆電 / 平板橫向 : 992 ~ 1199px -------- */
+@media (min-width: 992px) and (max-width: 1199px) {
     .right-panel {
-        width: 100% !important;
-        height: auto !important;
-        min-height: 55vh;
-        padding: 15px !important;
-        box-sizing: border-box;
+        padding: 30px 16px;
     }
-
-    /* 4. 微調發聲模式的巨石大小 */
-    #stone-container {
-        width: 140px;
-        height: 140px;
+    .game-title {
+        font-size: 44px;
+        margin-bottom: 18px;
+        letter-spacing: 2px;
     }
-    #stone-text {
-        font-size: 50px;
+    #status-message {
+        font-size: 40px;
+        min-height: 110px;
     }
-
-    /* 5. 微調嘴型/舌頭模式的輸送帶 */
+    .hint-text {
+        font-size: 24px;
+        min-height: 70px;
+    }
+    .mode-btn {
+        font-size: 17px;
+        padding: 12px 8px;
+    }
     .conveyor-wrapper {
-        transform: scale(0.9);
-        transform-origin: center center;
+        max-width: 480px;
+        height: 130px;
     }
-
-    /* 6. 微調冰淇淋的位置 (如果有套用的話) */
-    .ic-up { top: 3%; }
-    .ic-down { bottom: 3%; }
+    .target-zone {
+        width: 100px; height: 100px;
+        top: 15px; left: 15px;
+    }
+    .bubble {
+        width: 70px; height: 70px; font-size: 32px;
+    }
+    .bubble.current {
+        width: 92px; height: 92px; font-size: 48px;
+    }
+    #stone-container {
+        width: 160px; height: 160px;
+    }
+    #stone-text { font-size: 60px; }
+    .tutorial-btn {
+        font-size: 22px;
+        padding: 16px 30px;
+    }
+    .diff-btn {
+        padding: 14px 22px; font-size: 18px;
+    }
+    .mic-btn, #endBtn {
+        font-size: 18px;
+        padding: 14px 22px;
+    }
 }
 
-/* =========================================
-   📱 手機版專屬 RWD (螢幕寬度小於 600px 時觸發)
-   這段必須放在平板 RWD 的下方，讓它能覆蓋設定
-   ========================================= */
-@media (max-width: 600px) {
-    
-    /* 1. 大幅縮小虛擬人物的高度 */
+/* -------- 2) 平板直向 / 小平板 : 600 ~ 991px -------- */
+@media (max-width: 991px) {
+    /* 🔥 改成「上區固定 + 下區獨立滾動」: body 鎖死不滾,讓 right-panel 自己滾 */
+    body {
+        height: 100vh;
+        height: 100dvh;
+        overflow: hidden;
+    }
+    .main-layout {
+        flex-direction: column;
+        height: 100vh;
+        height: 100dvh;
+        width: 100%;
+    }
+    /* 上半部 3D 虛擬人物:固定高度,佔螢幕的 48% (保證頭+肩可見) */
     .left-panel {
-        height: 30vh !important;       /* 只佔螢幕 30% 的高度 */
-        min-height: 220px !important;  /* 最小高度縮減，避免佔用太多空間 */
+        flex: 0 0 auto;
+        width: 100%;
+        height: 48vh;
+        height: 48dvh;
+        min-height: 320px;
+        max-height: 520px;
+        border-right: none;
+        border-bottom: 2px solid rgba(255, 255, 255, 0.7);
+        box-shadow: 0 5px 25px rgba(0,0,0,0.06);
     }
-
-    /* 2. 讓右側遊戲區獲得更多空間 */
+    /* 下半部控制區:佔剩餘空間,內部獨立垂直滾動 */
     .right-panel {
-        height: auto !important;
-        min-height: 70vh !important;
-        padding: 10px !important;      /* 內距縮小，爭取更多顯示空間 */
+        flex: 1 1 0;
+        min-height: 0;            /* 🔥 關鍵:讓 flex 子元素可正確 overflow 滾動 */
+        width: 100%;
+        height: auto;
+        padding: 24px 18px;
+        justify-content: flex-start;
+        overflow-y: auto;
+        overflow-x: hidden;
+        -webkit-overflow-scrolling: touch; /* iOS 滾動慣性 */
+        overscroll-behavior: contain;       /* 防止滾到底時整頁被拖動 */
     }
-
-    /* 3. 縮小標題與按鈕，適應手機螢幕 */
     .game-title {
-        font-size: 24px !important;
+        font-size: 38px;
+        margin-top: 0;
+        margin-bottom: 14px;
+        letter-spacing: 2px;
+    }
+    .mode-selector {
+        gap: 8px;
+        margin-bottom: 16px;
+    }
+    .mode-btn {
+        font-size: 16px;
+        padding: 12px 6px;
+        border-width: 2px;
+        border-radius: 12px;
+    }
+    #status-message {
+        font-size: 36px;
+        min-height: 100px;
+        margin-bottom: 8px;
+    }
+    .hint-text {
+        font-size: 22px;
+        min-height: 60px;
+    }
+    .conveyor-wrapper {
+        width: 95%;
+        max-width: 560px;
+        height: 130px;
+        margin-bottom: 24px;
+        transform: none; /* 移除舊版 scale,改用真實尺寸縮放,避免被裁切 */
+    }
+    .target-zone {
+        width: 100px; height: 100px;
+        top: 15px; left: 15px;
+    }
+    .bubble {
+        width: 70px; height: 70px; font-size: 32px;
+    }
+    .bubble.current {
+        width: 92px; height: 92px; font-size: 48px;
+    }
+    .bubble.locked::after,
+    .stone-container.locked::after {
+        font-size: 46px;
+    }
+    #stone-container {
+        width: 150px; height: 150px;
+        border-radius: 18px;
+    }
+    #stone-text { font-size: 54px; }
+    #stone-hp {
+        font-size: 18px;
+        padding: 4px 12px;
+    }
+    #voice-game-ui {
+        height: 180px !important;
+    }
+    .tutorial-btn {
+        font-size: 20px;
+        padding: 16px 24px;
+        width: 95%;
+    }
+    .diff-btn {
+        padding: 14px 20px; font-size: 17px;
+    }
+    .mic-btn, #endBtn {
+        font-size: 17px;
+        padding: 14px 22px;
+    }
+    #start-controls, #tutorial-controls, #game-controls {
+        gap: 10px;
+        margin-bottom: 14px;
+    }
+    /* 冰淇淋目標位置稍微往內縮,避免緊貼分隔線 */
+    .ic-up { top: 4%; }
+    .ic-down { bottom: 4%; }
+    .ic-left { left: 4%; }
+    .ic-right { right: 4%; }
+    #ice-cream-target { font-size: 64px; }
+}
+
+/* -------- 3) 手機 : <600px -------- */
+@media (max-width: 599px) {
+    /* 🔥 手機:左面板給 42dvh,人物頭+肩完整可見;下方按鈕區獨立滾動 */
+    .left-panel {
+        height: 42vh;
+        height: 42dvh;
+        min-height: 280px;
+        max-height: 380px;
+    }
+    .right-panel {
+        padding: 14px 12px;
+        /* 確保有足夠捲動空間 */
+        padding-bottom: 30px;
+    }
+    .game-title {
+        font-size: 26px;
+        margin-bottom: 10px;
+        letter-spacing: 1px;
+    }
+    .mode-selector {
+        gap: 6px;
+        margin-bottom: 12px;
+    }
+    .mode-btn {
+        font-size: 13px;
+        padding: 10px 4px;
+        border-width: 2px;
+        border-radius: 10px;
+    }
+    #status-message {
+        font-size: 28px;
+        min-height: 80px;
+        text-shadow:
+            -2px -2px 0 #f39c12, 2px -2px 0 #f39c12,
+            -2px  2px 0 #f39c12, 2px  2px 0 #f39c12,
+             0px 6px 10px rgba(0,0,0,0.25);
+    }
+    .hint-text {
+        font-size: 18px;
+        min-height: 54px;
+        text-shadow:
+            -1.5px -1.5px 0 #e74c3c, 1.5px -1.5px 0 #e74c3c,
+            -1.5px  1.5px 0 #e74c3c, 1.5px  1.5px 0 #e74c3c,
+             0px 3px 6px rgba(0,0,0,0.25);
+    }
+    .conveyor-wrapper {
+        width: 100%;
+        max-width: 100%;
+        height: 110px;
+        border-radius: 55px;
+        margin-bottom: 18px;
+    }
+    .target-zone {
+        width: 80px; height: 80px;
+        top: 12px; left: 12px;
+        border-width: 3px;
+    }
+    #conveyor-belt {
+        gap: 12px;
+        padding-left: 18px;
+    }
+    .bubble {
+        width: 56px; height: 56px; font-size: 26px;
+        border-width: 2px;
+    }
+    .bubble.current {
+        width: 76px; height: 76px; font-size: 38px;
+        border-width: 2px;
+    }
+    .bubble.locked::after,
+    .stone-container.locked::after {
+        font-size: 36px;
+    }
+    #stone-container {
+        width: 120px; height: 120px;
+        border-radius: 16px;
+        border-width: 3px;
+    }
+    #stone-text { font-size: 42px; }
+    #stone-hp {
+        font-size: 14px;
+        padding: 3px 10px;
+        margin-top: 6px;
+    }
+    #voice-game-ui {
+        height: 150px !important;
+    }
+    .tutorial-btn {
+        font-size: 16px;
+        padding: 14px 16px;
+        width: 100%;
+        animation: none; /* 手機關掉脈動避免分心與耗電 */
+    }
+    .diff-btn {
+        padding: 12px 16px; font-size: 15px;
+        flex: 1 1 28%;
+        min-width: 90px;
+    }
+    .mic-btn, #endBtn {
+        font-size: 15px;
+        padding: 12px 16px;
+    }
+    #start-controls, #tutorial-controls, #game-controls {
+        gap: 8px;
+        margin-bottom: 12px;
+    }
+    .audio-meter {
+        width: 95%;
+    }
+    /* 冰淇淋符號縮小,避免遮住 3D 角色 */
+    #ice-cream-target { font-size: 52px; }
+    .ic-up { top: 2%; }
+    .ic-down { bottom: 2%; }
+    .ic-left { left: 2%; }
+    .ic-right { right: 2%; }
+    #stats-panel {
+        width: 95%;
+        font-size: 15px;
+        padding: 14px;
+    }
+}
+
+/* -------- 4) 平板/手機橫向但高度很矮 (例:橫拿手機) -------- */
+@media (max-height: 500px) and (orientation: landscape) {
+    .main-layout {
+        flex-direction: row;
+        height: 100vh;
+        height: 100dvh;
+    }
+    body { overflow: hidden; }
+    .left-panel {
+        flex: 4;
+        width: auto;
+        height: 100%;
+        min-height: 0;
+        max-height: none;
+        border-bottom: none;
+        border-right: 2px solid rgba(255, 255, 255, 0.7);
+    }
+    .right-panel {
+        flex: 6;
+        width: auto;
+        height: 100%;
+        padding: 10px 12px;
+        overflow-y: auto;
+    }
+    .game-title {
+        font-size: 22px;
+        margin: 0 0 6px 0;
+    }
+    #status-message {
+        font-size: 24px;
+        min-height: 60px;
+    }
+    .hint-text {
+        font-size: 16px;
+        min-height: 40px;
+    }
+    .conveyor-wrapper {
+        height: 90px;
         margin-bottom: 10px;
     }
-
-    .mode-btn {
-        padding: 8px 10px;
-        font-size: 14px;
-        flex: 1; /* 讓按鈕平均分配寬度 */
-        margin: 0 2px;
-    }
-
-    /* 4. 輸送帶與泡泡再稍微縮小一點 */
-    .conveyor-wrapper {
-        transform: scale(0.75);
-        transform-origin: top center;
-    }
-
-    /* 5. 發聲模式的巨石縮小 */
-    #stone-container {
-        width: 120px;
-        height: 120px;
-    }
-    #stone-text {
-        font-size: 45px;
-    }
+    .target-zone { width: 70px; height: 70px; top: 10px; left: 10px; }
+    .bubble { width: 50px; height: 50px; font-size: 22px; }
+    .bubble.current { width: 66px; height: 66px; font-size: 32px; }
+    #stone-container { width: 100px; height: 100px; }
+    #stone-text { font-size: 36px; }
 }
 
 /* =========================================
