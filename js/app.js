@@ -9,6 +9,7 @@ import { FaceLandmarker, FilesetResolver } from "https://cdn.skypack.dev/@mediap
 import { initMouthMode, startMouthDetection, stopMouthDetection, resumeAudio, setMicStatus } from './mode_mouth.js';
 import { startVoiceDetection,stopVoiceDetection ,voiceConfig,stopTfjsDetection,initTfjsVoice,startTfjsDetection} from './mode_voice.js';
 import { initTongueMode,startTongueDetection} from './mode_tongue.js';
+import { sendGameStats } from './api_client.js';
 
 // ==========================================
 // 全域變數匯出
@@ -39,6 +40,7 @@ let blinkTimer = 0;
 let nextBlinkInterval = 3;
 
 export let gameStats = {};
+export let playerName = '';   // 由開頭的玩家名稱輸入框設定;會跟結算統計一起送到 API
 
 // 音效設定
 // 🔥 偵測是否為行動裝置(用於降低 BGM 音量,避免外放被麥克風收回造成回音)
@@ -528,6 +530,14 @@ function endGame() {
                 html += '</ul>';
                 statsPanel.innerHTML = html;
             }
+
+            // 🌟 把結算統計送到 API 寫進 SQL Server(失敗不會影響遊戲畫面)
+            sendGameStats({
+                playerName: playerName || localStorage.getItem('player_name') || 'Guest',
+                mode: currentTrainingMode,
+                difficulty: currentDifficulty,
+                stats: gameStats,
+            });
         } else {
             statusDisplay.innerText = "已離開教學模式，請選擇難度開始挑戰！";
         }
@@ -782,5 +792,40 @@ function stopAllEngines() {
     stopTfjsDetection();
     stopVoiceDetection();
 }
-// 啟動系統
-startSystem();
+// =========================================
+// 玩家名稱輸入(先) → 啟動系統(後)
+// =========================================
+function askPlayerName() {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('player-name-overlay');
+    const input   = document.getElementById('player-name-input');
+    const errEl   = document.getElementById('player-name-error');
+    const submit  = document.getElementById('player-name-submit');
+    if (!overlay || !input || !submit) { resolve('Guest'); return; }
+
+    // 嘗試讀上次的名字(localStorage)
+    const last = localStorage.getItem('player_name');
+    if (last) input.value = last;
+    setTimeout(() => input.focus(), 100);
+
+    const finish = () => {
+      const name = input.value.trim();
+      if (!name) { errEl.textContent = '請輸入名字喔!'; input.focus(); return; }
+      if (name.length > 20) { errEl.textContent = '名字最長 20 字'; return; }
+      localStorage.setItem('player_name', name);
+      playerName = name;
+      overlay.style.display = 'none';
+      resolve(name);
+    };
+    submit.addEventListener('click', finish);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') finish(); });
+  });
+}
+
+// 進首頁前先拿到名字,再啟動 3D / MediaPipe / 模型載入
+(async () => {
+  await askPlayerName();
+  const loading = document.getElementById('loading-overlay');
+  if (loading) loading.style.display = '';   // 還原 CSS 預設樣式
+  startSystem();
+})();

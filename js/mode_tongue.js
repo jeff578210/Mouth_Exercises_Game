@@ -1,244 +1,207 @@
 // js/mode_tongue.js
-// 🌟 確保從 app.js 引入 faceLandmarker
-import { faceLandmarker, currentVrm, currentTrainingMode, isGameRunning, currentDifficulty, DIFFICULTY_CONFIG, poseQueue, isTutorialLocked, triggerResult } from './app.js';
+// === 用 U-Net 分割模型取代原本的 Teachable Machine 系統 ===
+// ✦ export 介面與遊戲邏輯與原版 100% 相同,app.js 不用修改
+// ✦ TF.js 4 透過 ESM CDN 動態載入,不影響 index.html 上既有的 tfjs@1.3.1(供 speech-commands 用)
+// ✦ 原版備份在 mode_tongue.js.bak
 
-const TM_URL = "./tm_model/"; 
+import { faceLandmarker, currentVrm, currentTrainingMode, isGameRunning, currentDifficulty,
+         DIFFICULTY_CONFIG, poseQueue, isTutorialLocked, triggerResult } from './app.js';
+import { TongueDirectionDetector } from './tongue_direction.js';
+// 使用 index.html 上載入的全域 tf(已升級為 TF 4.x);speech-commands 也共用這個版本
+const tf = window.tf;
 
-let tmModel;
+const MODEL_URL = "./web_model/model.json";
+
+let detector = null;
 let video;
 let isDetecting = false;
 let lastTime = performance.now();
 
-// ==========================================
-// 🎨 建立一個「隱藏的虛擬畫布」專門用來處理嘴部截圖
-// ==========================================
-const mouthCanvas = document.createElement('canvas');
-const mouthCtx = mouthCanvas.getContext('2d', { willReadFrequently: true });
-const PADDING = 40; // 邊距：為伸出的舌頭預留空間 (如果舌頭常被切到，可以調大到 60 或 70)
+// 沿用原本平滑邏輯(讓下游判定零修改)
+const SMOOTHING_FACTOR = 0.1;
+let smoothedProbs = {
+  'Neutral': 1.0,
+  'tongueUp': 0.0,
+  'tongueDown': 0.0,
+  'tongueLeft': 0.0,
+  'tongueRight': 0.0,
+};
+const GAME_TRIGGER_THRESHOLD = 0.2;
 
-// 遊戲狀態控制
+// 模組回傳的中文方向 → 專案內部既有名稱
+const DIR_TO_INTERNAL = {
+  '上': 'tongueUp',
+  '下': 'tongueDown',
+  '左': 'tongueLeft',
+  '右': 'tongueRight',
+};
+
 let holdTime = 0;
 let turnTimeLeft = 5000;
 let lastTarget = "";
 
-// 穩定器設定
-const SMOOTHING_FACTOR = 0.1; 
-let smoothedProbs = {
-    'Neutral': 1.0,
-    'tongueUp': 0.0,
-    'tongueDown': 0.0,
-    'tongueLeft': 0.0,
-    'tongueRight': 0.0
-};
-//設定機率大於多少才算成功
-const GAME_TRIGGER_THRESHOLD = 0.2; 
-
 export async function initTongueMode() {
-    console.log("正在載入 Teachable Machine 舌頭模型...");
-    const modelURL = TM_URL + "model.json";
-    const metadataURL = TM_URL + "metadata.json";
+  console.log("正在載入 U-Net 舌頭分割模型(取代 Teachable Machine)...");
+  try {
+    detector = await new TongueDirectionDetector({
+      tf,
+      modelPath: MODEL_URL,
+      openThresh: 0.06,    // 嘴開合門檻;< 此值視為閉嘴不偵測
+      probThresh: 0.5,     // 模型機率二值化門檻
+      inferEvery: 2,       // 每 N 幀推論一次(2 = 算力砍半)
+    }).load();
+    console.log("✅ 舌頭模型載入成功!");
+  } catch (error) {
+    console.error("❌ 模型載入失敗,請檢查 web_model/ 路徑與檔案:", error);
+  }
 
-    try {
-        tmModel = await window.tmImage.load(modelURL, metadataURL);
-        console.log("✅ 舌頭模型載入成功！");
-    } catch (error) {
-        console.error("❌ 模型載入失敗，請檢查網址是否正確:", error);
-    }
-
-    video = document.getElementById("video");
+  // 與原版相同:抓 id="video" 的影像元素(原版即如此,實際 DOM 由 app.js 處理)
+  video = document.getElementById("video");
 }
 
 export function startTongueDetection() {
-    if (isDetecting) return;
-    isDetecting = true;
-    lastTime = performance.now();
-    predictLoop();
+  if (isDetecting) return;
+  isDetecting = true;
+  lastTime = performance.now();
+  predictLoop();
 }
 
 export function stopTongueDetection() {
-    lastTarget = ""; 
+  lastTarget = "";
 }
 
 function checkTonguePoseMatch(targetPose, detectedAction, confidence, threshold) {
-    if (confidence <= threshold) return false;
-    const poseMap = {
-        '⬆️': 'tongueUp',
-        '⬇️': 'tongueDown',
-        '⬅️': 'tongueLeft',
-        '➡️': 'tongueRight'
-    };
-    return poseMap[targetPose] === detectedAction;
+  if (confidence <= threshold) return false;
+  const poseMap = {
+    '⬆️': 'tongueUp',
+    '⬇️': 'tongueDown',
+    '⬅️': 'tongueLeft',
+    '➡️': 'tongueRight'
+  };
+  return poseMap[targetPose] === detectedAction;
 }
 
-// 舌頭專屬的 AI 辨識迴圈
 async function predictLoop() {
-    if (!isDetecting || currentTrainingMode !== 'tongue') {
-        requestAnimationFrame(predictLoop);
-        return;
-    }
-
-    let currentTime = performance.now();
-    let dt = currentTime - lastTime;
-    lastTime = currentTime;
-
-    // 確保模型、影像和 MediaPipe 都準備好了
-    if (tmModel && video && video.readyState >= 2 && faceLandmarker) {
-        
-        // =========================================
-        // ✂️ 第零階段：利用 MediaPipe 找出嘴巴並截圖
-        // =========================================
-        const results = faceLandmarker.detectForVideo(video, currentTime);
-        
-        if (results.faceLandmarks && results.faceLandmarks.length > 0) {
-            const landmarks = results.faceLandmarks[0];
-            const w = video.videoWidth;
-            const h = video.videoHeight;
-
-            // 取得上下左右外嘴唇的節點座標
-            const topY = landmarks[0].y * h;
-            const bottomY = landmarks[17].y * h;
-            const leftX = landmarks[61].x * w;
-            const rightX = landmarks[291].x * w;
-
-            // 計算加上 Padding 後的裁切邊界 (限制不能超過影片原始尺寸)
-            const cropTop = Math.max(0, topY - PADDING);
-            const cropBottom = Math.min(h, bottomY + PADDING);
-            const cropLeft = Math.max(0, leftX - PADDING);
-            const cropRight = Math.min(w, rightX + PADDING);
-
-            const cropWidth = cropRight - cropLeft;
-            const cropHeight = cropBottom - cropTop;
-
-            if (cropWidth > 0 && cropHeight > 0) {
-                // 將虛擬畫布設為裁切的大小
-                mouthCanvas.width = cropWidth;
-                mouthCanvas.height = cropHeight;
-                
-                // 將影片的嘴部區域畫到虛擬畫布上
-                mouthCtx.drawImage(
-                    video, 
-                    cropLeft, cropTop, cropWidth, cropHeight, // 來源裁切座標
-                    0, 0, cropWidth, cropHeight               // 畫布目標座標
-                );
-
-                // 🌟 關鍵修正：把「虛擬畫布(mouthCanvas)」餵給 TM 模型，而不是整張臉的 video！
-                const predictions = await tmModel.predict(mouthCanvas);
-
-                // =========================================
-                // 🌟 第一階段：訊號平滑處理 (Stabilization) + 名稱轉換
-                // =========================================
-                const tmToInternalMap = {
-                    '沒伸舌頭': 'Neutral',
-                    '上': 'tongueUp',
-                    '下': 'tongueDown',
-                    '左': 'tongueLeft',
-                    '右': 'tongueRight'
-                };
-
-                predictions.forEach(p => {
-                    const originalName = p.className; 
-                    const internalName = tmToInternalMap[originalName] || originalName; 
-                    const rawProb = p.probability;
-                    
-                    if (!(internalName in smoothedProbs)) smoothedProbs[internalName] = 0.0;
-                    smoothedProbs[internalName] = smoothedProbs[internalName] * (1 - SMOOTHING_FACTOR) + rawProb * SMOOTHING_FACTOR;
-                });
-
-                let detected = "";
-                let highestConfidentProb = 0;
-                const directionalPoses = ['tongueUp', 'tongueDown', 'tongueLeft', 'tongueRight'];
-
-                directionalPoses.forEach(poseName => {
-                    if (smoothedProbs[poseName] > highestConfidentProb) {
-                        highestConfidentProb = smoothedProbs[poseName];
-                        detected = poseName;
-                    }
-                });
-
-                // =========================================
-                // 🌟 第二階段：動作定格魔法 
-                // =========================================
-                if (currentVrm) {
-                    try {
-                        ['tongueOut', 'tongueUp', 'tongueDown', 'tongueLeft', 'tongueRight'].forEach(exp => {
-                            currentVrm.expressionManager.setValue(exp, 0);
-                        });
-
-                        if (highestConfidentProb > 0.4 && detected !== "") {
-                            currentVrm.expressionManager.setValue('tongueOut', 0.8); 
-                            currentVrm.expressionManager.setValue(detected, 0.2);    
-                        }
-                    } catch (e) {}
-                }
-
-                // =========================================
-                // 🎮 第三階段：遊戲過關判定
-                // =========================================
-                if (isGameRunning && poseQueue.length > 0) {
-                    const targetPose = poseQueue[0]; 
-                    const conf = DIFFICULTY_CONFIG[currentDifficulty];
-
-                    // 開發者偵錯用的 log，確認機率有在變動
-                    console.log(`[AI 判定] ${detected} (${(highestConfidentProb*100).toFixed(0)}%) | 上:${(smoothedProbs['tongueUp']*100).toFixed(0)} 下:${(smoothedProbs['tongueDown']*100).toFixed(0)} 左:${(smoothedProbs['tongueLeft']*100).toFixed(0)} 右:${(smoothedProbs['tongueRight']*100).toFixed(0)}`);
-
-                    const isMatched = checkTonguePoseMatch(targetPose, detected, highestConfidentProb, GAME_TRIGGER_THRESHOLD);
-                    const hintMessage = document.getElementById("hint-message");
-                    const currentBubble = document.getElementById("bubble-0");
-
-                    if (targetPose !== lastTarget) {
-                        lastTarget = targetPose;
-                        holdTime = 0;
-                        turnTimeLeft = 10000; //等待10秒
-                    }
-
-                    if (isTutorialLocked) {
-                        if(hintMessage) {
-                            hintMessage.innerText = "🔊 請先聽完語音指示喔！";
-                            hintMessage.style.color = "#8e44ad";
-                        }
-                        holdTime = 0; 
-                        if(currentBubble) currentBubble.style.background = "";
-                    } else {
-                        if (isMatched) {
-                            if(hintMessage) {
-                                hintMessage.innerText = "👍 舌頭方向正確！請保持住！";
-                                hintMessage.style.color = "#f1c40f";
-                            }
-                            if (currentBubble) currentBubble.classList.remove("warning-blink");
-
-                            holdTime += dt;
-                            let progress = Math.min(holdTime / conf.holdDuration, 1) * 100;
-                            if(currentBubble) {
-                                currentBubble.style.background = `linear-gradient(to top, #2ecc71 ${progress}%, #3498db ${progress}%)`;
-                                currentBubble.style.transform = "scale(1.15)";
-                            }
-
-                            if (holdTime >= conf.holdDuration) {
-                                triggerResult(true);
-                                lastTarget = ""; 
-                            }
-                        } else {
-                            if(hintMessage) {
-                                hintMessage.innerText = highestConfidentProb > (GAME_TRIGGER_THRESHOLD - 0.2) ? `🤔 方向不太對喔！` : "👅 預備！請對著鏡頭伸出舌頭！";
-                                hintMessage.style.color = "#ffffff";
-                            }
-                            if (!conf.accumulateProgress) {
-                                holdTime = 0;
-                                if(currentBubble) { currentBubble.style.background = ""; currentBubble.style.transform = "scale(1)"; }
-                            }
-                            if (!conf.isTutorial) {
-                                turnTimeLeft -= dt;
-                                if (turnTimeLeft <= 2000 && currentBubble) currentBubble.classList.add("warning-blink");
-                                if (turnTimeLeft <= 0) {
-                                    triggerResult(false);
-                                    lastTarget = "";
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+  if (!isDetecting || currentTrainingMode !== 'tongue') {
     requestAnimationFrame(predictLoop);
+    return;
+  }
+
+  let currentTime = performance.now();
+  let dt = currentTime - lastTime;
+  lastTime = currentTime;
+
+  if (detector && video && video.readyState >= 2 && faceLandmarker) {
+    // MediaPipe FaceLandmarker(Tasks Vision)取得 landmarks
+    const results = faceLandmarker.detectForVideo(video, currentTime);
+
+    if (results.faceLandmarks && results.faceLandmarks.length > 0) {
+      const landmarks = results.faceLandmarks[0];
+
+      // ⭐ 核心改變:U-Net 直接告訴我們方向,不需要自己裁切嘴部、不用 TM
+      const r = detector.detect(video, landmarks);
+      // r.direction → '上' | '下' | '左' | '右' | null
+      // r.mouthOpen → boolean(閉嘴時 direction 必為 null,且不會跑推論)
+      // r.openRatio → number(內唇高/寬)
+
+      // 把方向結果灌進原本的 smoothedProbs 結構(讓下游遊戲邏輯零修改)
+      const internalName = (r.direction && DIR_TO_INTERNAL[r.direction]) || 'Neutral';
+      const newProbs = { Neutral: 0, tongueUp: 0, tongueDown: 0, tongueLeft: 0, tongueRight: 0 };
+      newProbs[internalName] = 1.0;
+      for (const key in smoothedProbs) {
+        smoothedProbs[key] = smoothedProbs[key] * (1 - SMOOTHING_FACTOR)
+                           + (newProbs[key] || 0) * SMOOTHING_FACTOR;
+      }
+
+      let detected = "";
+      let highestConfidentProb = 0;
+      const directionalPoses = ['tongueUp', 'tongueDown', 'tongueLeft', 'tongueRight'];
+      directionalPoses.forEach(poseName => {
+        if (smoothedProbs[poseName] > highestConfidentProb) {
+          highestConfidentProb = smoothedProbs[poseName];
+          detected = poseName;
+        }
+      });
+
+      // VRM 表情(完全沿用原版邏輯)
+      if (currentVrm) {
+        try {
+          ['tongueOut', 'tongueUp', 'tongueDown', 'tongueLeft', 'tongueRight'].forEach(exp => {
+            currentVrm.expressionManager.setValue(exp, 0);
+          });
+          if (highestConfidentProb > 0.4 && detected !== "") {
+            currentVrm.expressionManager.setValue('tongueOut', 0.8);
+            currentVrm.expressionManager.setValue(detected, 0.2);
+          }
+        } catch (e) {}
+      }
+
+      // 遊戲過關判定(完全沿用原版邏輯)
+      if (isGameRunning && poseQueue.length > 0) {
+        const targetPose = poseQueue[0];
+        const conf = DIFFICULTY_CONFIG[currentDifficulty];
+
+        console.log(`[AI 判定] ${detected} (${(highestConfidentProb*100).toFixed(0)}%) | 上:${(smoothedProbs['tongueUp']*100).toFixed(0)} 下:${(smoothedProbs['tongueDown']*100).toFixed(0)} 左:${(smoothedProbs['tongueLeft']*100).toFixed(0)} 右:${(smoothedProbs['tongueRight']*100).toFixed(0)}`);
+
+        const isMatched = checkTonguePoseMatch(targetPose, detected, highestConfidentProb, GAME_TRIGGER_THRESHOLD);
+        const hintMessage = document.getElementById("hint-message");
+        const currentBubble = document.getElementById("bubble-0");
+
+        if (targetPose !== lastTarget) {
+          lastTarget = targetPose;
+          holdTime = 0;
+          turnTimeLeft = 10000;
+        }
+
+        if (isTutorialLocked) {
+          if (hintMessage) {
+            hintMessage.innerText = "🔊 請先聽完語音指示喔!";
+            hintMessage.style.color = "#8e44ad";
+          }
+          holdTime = 0;
+          if (currentBubble) currentBubble.style.background = "";
+        } else {
+          if (isMatched) {
+            if (hintMessage) {
+              hintMessage.innerText = "👍 舌頭方向正確!請保持住!";
+              hintMessage.style.color = "#f1c40f";
+            }
+            if (currentBubble) currentBubble.classList.remove("warning-blink");
+
+            holdTime += dt;
+            let progress = Math.min(holdTime / conf.holdDuration, 1) * 100;
+            if (currentBubble) {
+              currentBubble.style.background = `linear-gradient(to top, #2ecc71 ${progress}%, #3498db ${progress}%)`;
+              currentBubble.style.transform = "scale(1.15)";
+            }
+
+            if (holdTime >= conf.holdDuration) {
+              triggerResult(true);
+              lastTarget = "";
+            }
+          } else {
+            if (hintMessage) {
+              hintMessage.innerText = highestConfidentProb > (GAME_TRIGGER_THRESHOLD - 0.2)
+                ? `🤔 方向不太對喔!`
+                : "👅 預備!請對著鏡頭伸出舌頭!";
+              hintMessage.style.color = "#ffffff";
+            }
+            if (!conf.accumulateProgress) {
+              holdTime = 0;
+              if (currentBubble) { currentBubble.style.background = ""; currentBubble.style.transform = "scale(1)"; }
+            }
+            if (!conf.isTutorial) {
+              turnTimeLeft -= dt;
+              if (turnTimeLeft <= 2000 && currentBubble) currentBubble.classList.add("warning-blink");
+              if (turnTimeLeft <= 0) {
+                triggerResult(false);
+                lastTarget = "";
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  requestAnimationFrame(predictLoop);
 }
