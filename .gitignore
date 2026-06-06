@@ -1,22 +1,27 @@
-bg_grassland.jpg
-bgm.mp3
+# Blender 原始檔(大,且不是執行檔)
 Untitled.blend
 Untitled.blend1
+model.vroid
+
+# 舊 Teachable Machine 模型,改用 web_model/ 取代
 tm_model/metadata.json
 tm_model/model.json
 tm_model/weights.bin
 
 # 本機備份不入庫
 *.bak
+
 # API server 環境變數與依賴
 api/node_modules/
 api/.env
+
+# 未使用的 VRM 練習/失敗檔(只留 VRMWithTongue.vrm 上線)
 練習版本01.vrm
 練習版本1.vrm
 練習版本02.vrm
-model.vroid
-VRMWithTongue.vrm
 VRMWithTongue失敗.vrm
+
+# 舊版備份
 為改版.html
 node_modules
 vosk_model
