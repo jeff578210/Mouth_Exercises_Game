@@ -531,8 +531,8 @@ function endGame() {
                 statsPanel.innerHTML = html;
             }
 
-            // 🌟 把結算統計送到 API 寫進 SQL Server(失敗不會影響遊戲畫面)
-            sendGameStats({
+            // 🌟 把結算統計送到 API 寫進 SQL Server,並在右上角顯示提示
+            uploadStatsWithToast({
                 playerName: playerName || localStorage.getItem('player_name') || 'Guest',
                 mode: currentTrainingMode,
                 difficulty: currentDifficulty,
@@ -541,6 +541,57 @@ function endGame() {
         } else {
             statusDisplay.innerText = "已離開教學模式，請選擇難度開始挑戰！";
         }
+    }
+}
+
+// ==========================================
+// 結算上傳 + 右上角浮動提示
+// ==========================================
+function showToast(text, type = 'info') {
+    // type: 'info' (藍) / 'success' (綠) / 'error' (紅)
+    let el = document.getElementById('upload-toast');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'upload-toast';
+        el.style.cssText = `
+            position: fixed; top: 20px; right: 20px; z-index: 10000;
+            padding: 12px 18px; border-radius: 10px;
+            font-family: 'Microsoft JhengHei', sans-serif; font-size: 14px;
+            font-weight: 600; color: #fff;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+            transform: translateX(120%); transition: transform .3s ease;
+            max-width: 280px; word-break: break-word;
+        `;
+        document.body.appendChild(el);
+    }
+    const colors = {
+        info:    '#3498db',
+        success: '#27ae60',
+        error:   '#e74c3c',
+    };
+    el.style.background = colors[type] || colors.info;
+    el.innerText = text;
+    requestAnimationFrame(() => { el.style.transform = 'translateX(0)'; });
+    clearTimeout(el._hideT);
+    if (type !== 'info') {
+        el._hideT = setTimeout(() => { el.style.transform = 'translateX(120%)'; }, 4000);
+    }
+}
+
+async function uploadStatsWithToast(payload) {
+    showToast('📤 上傳結算中…', 'info');
+    let res = await sendGameStats(payload);
+    // Azure SQL 冷啟動常見:第一次 500 / DB 沒喚醒,等 3 秒自動重試一次
+    if (!res.ok) {
+        showToast('🔄 上傳失敗,5 秒後重試…', 'info');
+        await new Promise(r => setTimeout(r, 5000));
+        res = await sendGameStats(payload);
+    }
+    if (res.ok) {
+        showToast(`✅ 上傳成功 (#${res.id ?? '?'})`, 'success');
+    } else {
+        const reason = res.error ? `:${res.error.slice(0, 80)}` : res.status ? ` (HTTP ${res.status})` : '';
+        showToast(`❌ 上傳失敗${reason}`, 'error');
     }
 }
 
