@@ -141,5 +141,7 @@ app.get('/api/game-stats', async (req, res) => {
   }
 });
 
-const PORT = parseInt(process.env.PORT || '3000', 10);
-app.listen(PORT, () => console.log(`🚀 Mouth Exercises API 啟動於 http://localhost:${PORT}`));
+// 注意:Windows App Service (iisnode) 給的 PORT 是具名管道路徑(字串),不是數字。
+// 直接傳給 app.listen,Node 兩種型別都吃。
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Mouth Exercises API 啟動於 ${PORT}`));
