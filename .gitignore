@@ -2,9 +2,15 @@ bg_grassland.jpg
 bgm.mp3
 Untitled.blend
 Untitled.blend1
-metadata.json
-model.json
-weights.bin
+tm_model/metadata.json
+tm_model/model.json
+tm_model/weights.bin
+
+# 本機備份不入庫
+*.bak
+# API server 環境變數與依賴
+api/node_modules/
+api/.env
 練習版本01.vrm
 練習版本1.vrm
 練習版本02.vrm
@@ -12,3 +18,5 @@ model.vroid
 VRMWithTongue.vrm
 VRMWithTongue失敗.vrm
 為改版.html
+node_modules
+vosk_model

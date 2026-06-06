@@ -1,15 +1,25 @@
 // js/mode_voice.js
-import { currentVrm, currentTrainingMode, isGameRunning, isTutorialLocked, gameStats, poseQueue, triggerResult ,currentDifficulty } from './app.js';
-// 🛑 核心修復 1：匯入嘴型模式的辨識器，用來把它強制關閉
+import { currentVrm, currentTrainingMode, isGameRunning, isTutorialLocked, gameStats, poseQueue, triggerResult ,currentDifficulty ,renderBelt,faceLandmarker ,videoElement,getVolumeLevel} from './app.js';
 import { analyser, dataArray, isMicEnabled, recognitionMouth } from './mode_mouth.js';
 
-let isDetecting = false;
-let currentTargetSyllable = "PA";
-let remainingHits = 5;
-let hitCooldown = false; 
-let recognition = null;
+let isDetecting = false; //檢查遊戲有沒有再進行
+let currentTargetSyllable; //當前題目
+let hitCooldown = false; //防止連擊
+let isWaitingForNextSound = false; //防止連擊
+let recognition = null;  //語音偵測物件
+let recognizer; //擴充庫物件
+let isTfjsRunning = false; //Teachable Machine是否執行中
+export let isVoskRunning = false;
+export const voiceConfig = {
+    id: 'mouth',
+    voiceTutorialTopic: ["PA", "TA", "KA", "LA", "PA", "TA", "KA", "LA"], //教學模式題庫
+    lockThreshold:4, //設定教學模式前面多少題要聽完語音才能動作
+    MAX_HEALTH : 5,//預設石頭最大血量
+    remainingHits : 1, //預設石頭當前血量
+    stoneAnimState : "normal"// 記錄石頭動畫狀態 "normal", "hit", "explode"
+};
 
-// 📖 擴充同音字字典：把所有可能的短促音或雜訊字都放進來
+// 語音辨識庫
 const SYLLABLE_MAP = {
     "PA": ["pa", "趴", "怕", "啪", "叭", "吧", "巴", "把", "爸", "發", "爬", "帕", "哈", "八", "拔", "潘", "判", "旁", "胖", "派", "拍", "阿", "啊"],
     "TA": ["ta", "他", "她", "它", "踏", "塔", "大", "打", "答", "達", "太", "探", "塌", "沓", "特", "搭", "代"],
@@ -17,93 +27,113 @@ const SYLLABLE_MAP = {
     "LA": ["la", "拉", "啦", "喇", "辣", "拿", "哪", "納", "藍", "落", "來", "哩", "了", "老", "na", "那", "男"]
 };
 
-export async function initVoiceMode() {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognition) {
-        recognition = new SpeechRecognition();
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        recognition.lang = 'zh-TW';
-        recognition.onresult = (event) => {
-            if (!isDetecting || !isGameRunning || isTutorialLocked || hitCooldown) return;
-            
-            for (let i = event.resultIndex; i < event.results.length; i++) {
-                const transcript = event.results[i][0].transcript.toLowerCase();
-                console.log(`[發聲辨識] 聽到: "${transcript}"`); 
-                
-                const validWords = SYLLABLE_MAP[currentTargetSyllable];
-                if (validWords && validWords.some(word => transcript.includes(word))) {
-                    console.log(`🎯 命中目標音: ${currentTargetSyllable}!`);
-                    triggerStoneHit();
-                    try { recognition.stop(); } catch(e){}
-                    break; 
-                }
-            }
-        };
 
-        recognition.onend = () => {
-            if (isDetecting && isGameRunning) {
-                try { recognition.start(); } catch(e){}
-            }
-        };
+// 在你的 startGame 函式中呼叫 startTfjsDetection()，
+// 並在 stopAllEngines 或 gameOver 時呼叫 stopTfjsDetection()。
+// 1. 初始化模型
+export async function initTfjsVoice() {
+    // 這裡指向你存放模型檔案的路徑
+    const currentPath = window.location.href.substring(0, window.location.href.lastIndexOf('/'));
+
+    // 語音模型
+    const VOICE_URL = currentPath + "/tm_model/voice/";
+    const checkpointURL = VOICE_URL + "model.json";
+    const metadataURL = VOICE_URL + "metadata.json";
+
+    try {
+        recognizer = speechCommands.create(
+            "BROWSER_FFT", // 使用瀏覽器內建的傅立葉轉換
+            undefined, 
+            checkpointURL, 
+            metadataURL
+        );
+
+        // 確保模型載入完成
+        await recognizer.ensureModelLoaded();
+        console.log("✅ TF.js 模型載入成功！標籤：", recognizer.wordLabels());
+    } catch (error) {
+        console.error("❌ 模型載入失敗:", error);
     }
 }
+
+// 2. 啟動監聽
+export async function startTfjsDetection() {
+     window.addEventListener('keydown', (event) => {
+        switch(event.code) {
+            case 'Space': 
+            console.log(`🎯 命中目標音`);
+            triggerStoneHit();
+            try { recognition.stop(); } catch(e){}
+            break; 
+        }
+    });
+    if (!recognizer || isTfjsRunning) return;
+
+    isTfjsRunning = true;
+
+    // listen() 會啟動麥克風並持續回傳結果
+    await recognizer.listen(result => {
+        const scores = result.scores; // 每個標籤的信心機率陣列
+        const labels = recognizer.wordLabels(); // 你的標籤陣列
+        
+        // 找出最高分的索引
+        let maxIndex = 0;
+        let maxScore = 0;
+        for (let i = 0; i < scores.length; i++) {
+            if (scores[i] > maxScore) {
+                maxScore = scores[i];
+                maxIndex = i;
+            }
+        }
+
+        const detectedWord = labels[maxIndex];
+
+        // 🌟 判定門檻：信心度必須超過 0.85，且不是「背景雜音」
+        if (maxScore > 0.85 && detectedWord !== "_background_noise_") {
+            console.log(`🎯 偵測到音節: ${detectedWord} (信心度: ${(maxScore * 100).toFixed(1)}%)`);
+            
+            // 呼叫你的遊戲邏輯，例如：
+            // handleHit(detectedWord); 
+        }
+    }, {
+        includeSpectrogram: false, // 遊戲不需要視覺頻譜，關閉以節省效能
+        probabilityThreshold: 0.75, // 核心過濾門檻
+        overlapFactor: 0.5, // 偵測視窗重疊率，0.5 代表反應較快
+        invokeCallbackOnNoiseAndUnknown: false
+    });
+    if(isGameRunning){
+        predictLoop(); //AI 模型判定主迴圈（例如臉部追蹤或是音量頻譜分析）呼叫它代表「判定引擎」正式開始運轉，每一幀都會去檢查玩家有沒有達成動作
+    }
+}
+
+// 3. 停止監聽
+export function stopTfjsDetection() {
+    if (recognizer && isTfjsRunning) {
+        recognizer.stopListening();
+        isTfjsRunning = false;
+        console.log("🔇 已關閉語音監聽");
+    }
+}
+
 
 export function startVoiceDetection() {
     if (isDetecting) return;
     isDetecting = true;
     
-    // 🛑 核心修復 2：搶奪麥克風！強制停止嘴型模式的辨識器
-    if (recognitionMouth) {
+    if (recognitionMouth) { //檢查是否開啟語音判定
         try { recognitionMouth.stop(); } catch(e){}
+        setTimeout(() => { try { recognitionMouth.start(); } catch(e){} }, 100);
     }
-
-    if (recognition) {
-        try { recognition.stop(); } catch(e){}
-        setTimeout(() => { try { recognition.start(); } catch(e){} }, 100);
+    
+    //如果遊戲開始在進行題目渲染
+    if(isGameRunning){
+        predictLoop(); //AI 模型判定主迴圈（例如臉部追蹤或是音量頻譜分析）呼叫它代表「判定引擎」正式開始運轉，每一幀都會去檢查玩家有沒有達成動作
     }
-    spawnVoiceTask();
-    predictLoop();
 }
 
 export function stopVoiceDetection() {
-    isDetecting = false;
+    isDetecting = false; 
     if (recognition) { try { recognition.stop(); } catch(e){} }
-}
-
-function spawnVoiceTask() {
-    if (poseQueue.length === 0) return;
-    
-    currentTargetSyllable = poseQueue[0];
-    remainingHits = (isTutorialLocked) ? 1 : 2;
-
-    const stone = document.getElementById("stone-container");
-    const text = document.getElementById("stone-text");
-    const hp = document.getElementById("stone-hp");
-    
-    if (stone) {
-        stone.className = ""; 
-        text.innerText = currentTargetSyllable;
-        hp.innerText = `剩餘 ${remainingHits} 次`;
-    }
-
-    // 🌟 核心修改：只有「教學模式」才唸出指令
-    if (currentDifficulty === "tutorial") {
-        window.speechSynthesis.cancel();
-        let msg = `大聲喊出 ${currentTargetSyllable}`;
-        const utterance = new SpeechSynthesisUtterance(msg);
-        utterance.lang = "zh-TW";
-
-        if (isTutorialLocked) {
-            if (stone) stone.style.opacity = "0.5"; 
-            utterance.onend = () => { if (stone) stone.style.opacity = "1"; };
-        }
-        window.speechSynthesis.speak(utterance);
-    } else {
-        // 非教學模式：不唸指令，直接確保石頭是亮的
-        window.speechSynthesis.cancel();
-        if (stone) stone.style.opacity = "1";
-    }
 }
 
 function predictLoop() {
@@ -112,11 +142,12 @@ function predictLoop() {
         return;
     }
 
-    if (isMicEnabled && analyser) {
+    let currentVolume
+    if (analyser) {
         analyser.getByteFrequencyData(dataArray);
         let sum = 0;
         for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
-        let currentVolume = sum / dataArray.length;
+        currentVolume = sum / dataArray.length;
 
         // 🌟 核心修復 3：改抓正確的 ID `meter-fill`
         const meterFill = document.getElementById("meter-fill");
@@ -124,33 +155,50 @@ function predictLoop() {
             meterFill.style.width = Math.min((currentVolume / 80) * 100, 100) + "%";
             meterFill.style.backgroundColor = "#e74c3c"; // 發聲模式專屬的紅色音量條
         }
+    }
 
-        if (currentVrm) {
-            currentVrm.expressionManager.setValue('aa', Math.min(currentVolume / 40, 1.0));
+    const results = faceLandmarker.detectForVideo(videoElement, performance.now());
+    let jawOpen = 0, mouthPucker = 0, mouthStretch = 0, mouthSmile = 0, mouthFunnel = 0;
+
+    if (results.faceBlendshapes && results.faceBlendshapes.length > 0) {
+        const shapes = results.faceBlendshapes[0].categories;
+        jawOpen = shapes.find(s => s.categoryName === "jawOpen")?.score || 0;
+    }
+    let volumeLevel = getVolumeLevel();
+    if (currentVolume > volumeLevel) {
+        if (!isWaitingForNextSound && jawOpen > 0.1 && !hitCooldown) {
+            triggerStoneHit();
+            isWaitingForNextSound = true; // 聲音上鎖
+        }
+    } 
+    else if (currentVolume < 10) { 
+        if (isWaitingForNextSound && !hitCooldown) {
+            isWaitingForNextSound = false;
         }
     }
+
     requestAnimationFrame(predictLoop);
 }
 
+
+
 function triggerStoneHit() {
+    if (hitCooldown) return; 
     hitCooldown = true;
-    remainingHits--;
-    
+    voiceConfig.remainingHits--; //將這顆石頭的剩餘需要打擊次數減 1。
     const stone = document.getElementById("stone-container");
     const hp = document.getElementById("stone-hp");
 
-    if (remainingHits > 0) {
+    if (voiceConfig.remainingHits > 0) {//石頭扣寫
         stone.classList.add("stone-hit");
         setTimeout(() => { stone.classList.remove("stone-hit"); hitCooldown = false; }, 400);
-        hp.innerText = `剩餘 ${remainingHits} 次`;
+        hp.innerText = `剩餘 ${voiceConfig.remainingHits} 次`;
     } else {
-        stone.classList.add("stone-explode");
-        if (gameStats && gameStats[currentTargetSyllable]) gameStats[currentTargetSyllable].success++;
-        
+        stone.classList.add("stone-explode"); //石頭破碎動畫
+        if (gameStats && gameStats[currentTargetSyllable]) gameStats[currentTargetSyllable].success++; //寫入統計數據成功與失敗次數
         setTimeout(() => {
-            triggerResult(true); 
-            hitCooldown = false;
-            if (isGameRunning) spawnVoiceTask(); 
-        }, 1000);
+            hitCooldown = false; //解開連擊鎖
+            triggerResult(true); //紀錄過關
+        }, 1000); // 給予1秒鐘的時間顯示爆炸動畫
     }
 }
