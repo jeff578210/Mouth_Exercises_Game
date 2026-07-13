@@ -10,15 +10,33 @@ let chartMode = null;
 
 const $ = (id) => document.getElementById(id);
 
-async function fetchHistory(playerName) {
+async function fetchHistoryOnce(playerName, timeoutMs = 20000) {
   const base = (window.GAME_API_BASE || '').replace(/\/$/, '');
   if (!base) throw new Error('window.GAME_API_BASE 未設定');
   const url = `${base}/api/game-stats?player=${encodeURIComponent(playerName)}&limit=50`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const body = await res.json();
-  if (!body.ok) throw new Error(body.error || 'API 回錯');
-  return body.rows || [];
+  // 加 timeout,避免 Azure SQL 冷啟動時請求無限掛著
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = await res.json();
+    if (!body.ok) throw new Error(body.error || 'API 回錯');
+    return body.rows || [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Azure SQL Free 閒置會自動暫停,第一次呼叫常需喚醒 → 失敗時自動重試一次
+async function fetchHistory(playerName, onRetry) {
+  try {
+    return await fetchHistoryOnce(playerName);
+  } catch (e) {
+    if (onRetry) onRetry();
+    await new Promise(r => setTimeout(r, 5000));
+    return await fetchHistoryOnce(playerName, 30000);
+  }
 }
 
 function formatTime(iso) {
@@ -157,8 +175,11 @@ export async function openHistory(playerName) {
   content.style.display = 'none';
 
   try {
-    const rows = await fetchHistory(playerName);
+    const rows = await fetchHistory(playerName, () => {
+      loading.innerHTML = '⏳ 資料庫喚醒中,請稍候…<br><span style="font-size:12px;">(閒置後第一次查詢需要約 30 秒)</span>';
+    });
     loading.style.display = 'none';
+    loading.textContent = '載入中…';   // 還原,下次開啟用
     if (!rows.length) {
       emptyEl.style.display = 'block';
       return;
