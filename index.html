@@ -9,6 +9,8 @@
     <!-- TF.js 升級到 4.x:給新的 U-Net 舌頭模型使用;speech-commands 也用同一個全域 tf -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/speech-commands@0.5.4/dist/speech-commands.min.js"></script>
+    <!-- Chart.js:歷史紀錄圖表 -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
     <!-- Teachable Machine 已不再使用(被 U-Net 取代),保留舊腳本參考可改回 tfjs@1.3.1 + 這行 -->
     <!-- <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8/dist/teachablemachine-image.min.js"></script> -->
 
@@ -99,6 +101,17 @@
                 <button id="btn-medium" class="diff-btn" disabled>🟡 中級 </button>
                 <button id="btn-hard" class="diff-btn" disabled>🔴 高級 </button>
             </div>
+
+            <div class="controls" id="history-controls">
+                <button id="btn-history" class="history-btn" style="
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: #fff; border: none; padding: 12px 22px;
+                    border-radius: 12px; font-size: 15px; font-weight: 700;
+                    cursor: pointer; box-shadow: 0 4px 15px rgba(102,126,234,0.35);
+                    transition: transform .12s, box-shadow .12s;">
+                    📊 查看我的訓練紀錄
+                </button>
+            </div>
             
             <div class="controls" id="game-controls" style="display: none;">
                 <button id="toggleMicBtn" class="mic-btn">🎙️ 語音判定：開啟</button>
@@ -109,6 +122,78 @@
         </div>
     </div>
     
+    <!-- 歷史紀錄 Modal -->
+    <div id="history-overlay" style="
+        position: fixed; inset: 0; z-index: 9998; display: none;
+        background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+        align-items: flex-start; justify-content: center; overflow-y: auto; padding: 30px 15px;
+        font-family: 'Microsoft JhengHei', sans-serif;">
+        <div style="background:#fff; border-radius:16px; width:min(900px, 96vw);
+                    box-shadow:0 20px 60px rgba(0,0,0,0.4); padding:24px 28px; color:#2c3e50;">
+            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #ecf0f1; padding-bottom:12px; margin-bottom:16px;">
+                <h2 style="margin:0; color:#2c3e50;">📊 <span id="history-name"></span> 的訓練紀錄</h2>
+                <button id="history-close" style="background:#e74c3c; color:#fff; border:none; width:36px; height:36px; border-radius:50%; font-size:16px; cursor:pointer;">✕</button>
+            </div>
+
+            <div id="history-loading" style="text-align:center; padding:40px; color:#7f8c8d; font-size:16px;">載入中…</div>
+            <div id="history-empty" style="display:none; text-align:center; padding:40px; color:#7f8c8d;">
+                <p style="font-size:18px;">🌱 目前還沒有紀錄</p>
+                <p style="font-size:14px;">完成一場遊戲後就會出現在這裡!</p>
+            </div>
+
+            <div id="history-content" style="display:none;">
+                <!-- 四張統計卡 -->
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; margin-bottom:24px;">
+                    <div style="background:#3498db; color:#fff; border-radius:12px; padding:14px; text-align:center;">
+                        <div style="font-size:12px; opacity:0.85;">總場次</div>
+                        <div id="stat-total" style="font-size:28px; font-weight:800; margin-top:4px;">0</div>
+                    </div>
+                    <div style="background:#27ae60; color:#fff; border-radius:12px; padding:14px; text-align:center;">
+                        <div style="font-size:12px; opacity:0.85;">平均達成率</div>
+                        <div id="stat-avg" style="font-size:28px; font-weight:800; margin-top:4px;">0%</div>
+                    </div>
+                    <div style="background:#f39c12; color:#fff; border-radius:12px; padding:14px; text-align:center;">
+                        <div style="font-size:12px; opacity:0.85;">最佳成績</div>
+                        <div id="stat-best" style="font-size:28px; font-weight:800; margin-top:4px;">0%</div>
+                    </div>
+                    <div style="background:#9b59b6; color:#fff; border-radius:12px; padding:14px; text-align:center;">
+                        <div style="font-size:12px; opacity:0.85;">最近訓練</div>
+                        <div id="stat-recent" style="font-size:16px; font-weight:700; margin-top:8px;">-</div>
+                    </div>
+                </div>
+
+                <!-- 兩張圖表:趨勢 + 各模式次數 -->
+                <div style="display:grid; grid-template-columns:2fr 1fr; gap:20px; margin-bottom:24px;">
+                    <div>
+                        <h3 style="margin:0 0 10px; color:#34495e; font-size:16px;">📈 達成率趨勢(最近 20 場)</h3>
+                        <div style="height:220px;"><canvas id="chart-trend"></canvas></div>
+                    </div>
+                    <div>
+                        <h3 style="margin:0 0 10px; color:#34495e; font-size:16px;">🎯 各模式訓練</h3>
+                        <div style="height:220px;"><canvas id="chart-mode"></canvas></div>
+                    </div>
+                </div>
+
+                <!-- 近 10 場明細表 -->
+                <div>
+                    <h3 style="margin:0 0 10px; color:#34495e; font-size:16px;">📋 近 10 場詳細</h3>
+                    <table id="history-table" style="width:100%; border-collapse:collapse; font-size:14px;">
+                        <thead>
+                            <tr style="background:#ecf0f1; color:#2c3e50;">
+                                <th style="padding:8px; text-align:left;">時間</th>
+                                <th style="padding:8px; text-align:center;">模式</th>
+                                <th style="padding:8px; text-align:center;">難度</th>
+                                <th style="padding:8px; text-align:center;">成功 / 失敗</th>
+                                <th style="padding:8px; text-align:right;">達成率</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <video id="webcam" autoplay playsinline muted style="display: none;"></video>
     <script type="module" src="./js/app.js"></script>
 </body>
