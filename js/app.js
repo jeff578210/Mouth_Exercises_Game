@@ -10,6 +10,7 @@ import { initMouthMode, startMouthDetection, stopMouthDetection, resumeAudio, se
 import { startVoiceDetection,stopVoiceDetection ,voiceConfig,stopTfjsDetection,initTfjsVoice,startTfjsDetection} from './mode_voice.js';
 import { initTongueMode,startTongueDetection} from './mode_tongue.js';
 import { sendGameStats } from './api_client.js';
+import { openHistory } from './history_view.js';
 
 // ==========================================
 // 全域變數匯出
@@ -228,6 +229,15 @@ function unlockGameUI(){
         const btn = document.getElementById(id);
         if(btn) btn.disabled = false;
     });
+    // 綁定歷史紀錄按鈕
+    const histBtn = document.getElementById("btn-history");
+    if (histBtn) {
+        histBtn.disabled = false;
+        histBtn.addEventListener("click", () => {
+            const name = playerName || localStorage.getItem('player_name') || 'Guest';
+            openHistory(name);
+        });
+    }
 }
 
 function initThreeJS() {
@@ -492,6 +502,7 @@ function endGame() {
     const els = {
         "tutorial-controls": "flex",
         "start-controls": "flex",
+        "history-controls": "flex",
         "game-controls": "none",
         "game-ui": "none",
         "audio-meter-container": "none" ,
@@ -816,6 +827,7 @@ function changeUIshow(isVoiceMode){
 const els = {
         "tutorial-controls": "none",
         "start-controls": "none",
+        "history-controls": "none",
         "game-controls": "flex",
         "game-ui": isVoiceMode ? "none" : "flex",
         "voice-game-ui": isVoiceMode ? "flex" : "none", 
